@@ -197,8 +197,8 @@ function studio(renderer) {
 /* ---------- the characters' life (solid models): one function per model, called every frame ----------
    rig: the parts by name (node), their rest pose (reset before each frame), per-model state, the face canvas.
    ctx: t (animation seconds, paced), dt, time (real seconds), state and the voice (level, talk), float,
-   secondary (the "órbitas" speed), pointer (-1..1 over the canvas), motion (the orb window's speed, px/s),
-   roam (half extents where the model may wander, dialogue only), camera. */
+   spin ("giro automático"), secondary (the "órbitas" speed), pointer (-1..1 over the canvas), motion (the orb
+   window's speed, px/s), roam (half extents where the model may wander, dialogue only), camera. */
 
 const wobble = (t, seed) => 0.5 * Math.sin(t * 1.3 + seed) + 0.3 * Math.sin(t * 2.7 + seed * 1.7) + 0.2 * Math.sin(t * 4.1 + seed * 2.3);
 
@@ -452,8 +452,33 @@ const BEHAVIORS = {
 
   glados(rig, ctx) {
     const s = rig.state;
-    // The body hangs from the ceiling plate and sways (as in the Blender loop: a few degrees each way).
     const body = rig.node("corpo");
+    // She turns all the way around inside her ceiling plate (the body spins on the plate's center, the plate
+    // stays): a whole turn now and then, on and on while she thinks, and while talking she ends the turn
+    // facing the user. "Giro automático" sets how often and how fast; at 0 she never turns.
+    const turn = Math.PI * 2;
+    s.yaw ??= 0;
+    s.yawGoal ??= 0;
+    s.yawSpeed ??= 0;
+    s.nextTurn ??= ctx.time + 5 + Math.random() * 5;
+    const thinking = ctx.state === "thinking" && ctx.spin > 0.02;
+    if (thinking) s.yawGoal = Math.max(s.yawGoal, s.yaw + 1.2);
+    else if (s.thinking) s.yawGoal = Math.ceil(s.yaw / turn - 1e-3) * turn; // done thinking: finish the turn, face the user
+    else if (ctx.spin > 0.02 && !ctx.speaking && ctx.time > s.nextTurn && Math.abs(s.yawGoal - s.yaw) < 0.05) {
+      s.yawGoal += (Math.random() < 0.5 ? -1 : 1) * turn;
+      s.nextTurn = ctx.time + (16 + Math.random() * 18) / ctx.spin;
+    }
+    s.thinking = thinking;
+    const fastest = 1.1 * Math.max(0.35, ctx.spin) * (ctx.calm ? 0.3 : 1);
+    s.yawSpeed = ease(s.yawSpeed, clamp((s.yawGoal - s.yaw) * 1.5, -fastest, fastest), 2.2, ctx.dt);
+    s.yaw += s.yawSpeed * ctx.dt;
+    if (Math.abs(s.yaw) > turn * 4) { // keep the numbers small: whole turns change nothing
+      const whole = Math.round(s.yaw / turn) * turn;
+      s.yaw -= whole;
+      s.yawGoal -= whole;
+    }
+    body.rotateZ(s.yaw);
+    // The body hangs from the ceiling plate and sways (as in the Blender loop: a few degrees each way).
     body.rotateX(0.045 * Math.sin(ctx.t * 0.47) * ctx.float);
     body.rotateY(0.06 * Math.sin(ctx.t * 0.31 + 1) * ctx.float);
     body.rotateZ(0.035 * Math.sin(ctx.t * 0.23 + 2) * ctx.float);
@@ -1018,7 +1043,7 @@ export class Hologram {
       ? { x: Math.max(0, this.view.width / 2 / this.view.ppu - 0.95), z: Math.max(0, this.view.height / 2 / this.view.ppu - 0.85) } : null;
     BEHAVIORS[this.manifest.behavior]?.(rig, {
       t: rig.clock, dt, time: now / 1000, state, level: smooth.level, talk: smooth.voice, speaking: state === "speaking",
-      float: config.float / 50, secondary: config.orbit / 50, pulse: config.pulse / 50, pointer, motion: this.motion,
+      float: config.float / 50, spin: config.spin / 50, secondary: config.orbit / 50, pulse: config.pulse / 50, pointer, motion: this.motion,
       roam, camera: this.camera, config, calm,
     });
     for (const object of rig.nodes) {
