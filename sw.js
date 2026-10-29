@@ -1,6 +1,6 @@
 /* Conexão JARVIS: keeps the app's own files for offline start (the conversation itself always needs
    the PC). Network first, so a new version arrives as soon as it is online. */
-const CACHE = "conexao-jarvis-v2";
+const CACHE = "conexao-jarvis-v3";
 const SHELL = ["./", "index.html", "mobile.css", "mobile.js", "panel.js", "holo-loader.js", "holo.js", "holo-engine.js", "manifest.json", "icon.svg",
   "vendor/jsQR.js", "vendor/three/three.module.min.js", "vendor/three/addons/postprocessing/EffectComposer.js",
   "vendor/three/addons/postprocessing/MaskPass.js", "vendor/three/addons/postprocessing/OutputPass.js",

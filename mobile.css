@@ -286,10 +286,15 @@ body[data-state="thinking"] .state {
   display: block;
   width: 100%;
   height: 100%;
-  mix-blend-mode: screen; /* the bloom's black is the page's own background */
-  /* and, where a WebView does not blend, the black still fades out before the edges: no square */
+  mix-blend-mode: screen; /* a hologram's light only adds to the page */
   -webkit-mask-image: radial-gradient(closest-side, #000 72%, transparent 100%);
   mask-image: radial-gradient(closest-side, #000 72%, transparent 100%);
+}
+
+.holo.is-solid canvas { /* a solid character covers what is behind it, edges included */
+  mix-blend-mode: normal;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .holo-fallback {

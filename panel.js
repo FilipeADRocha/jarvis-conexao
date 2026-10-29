@@ -13,16 +13,17 @@
   const node = (tag, className, text) => phone().node(tag, className, text);
   const PRESETS = {
     jarvis: { accent: "#2bd9ff", accent2: "#ffb45e", background: "profundo", style: "reator", font: "tecnica" },
-    mark3: { accent: "#ff4343", accent2: "#ffc94a", background: "carbono", style: "tatico", font: "tecnica" },
-    sexta: { accent: "#b07bff", accent2: "#ff7ad9", background: "naval", style: "reator", font: "classica" },
-    stealth: { accent: "#e3eef3", accent2: "#8fa6b2", background: "preto", style: "minimal", font: "tecnica" },
-    hulk: { accent: "#ffb020", accent2: "#ff5a1f", background: "carbono", style: "tatico", font: "tecnica" },
-    matrix: { accent: "#3dff7a", accent2: "#b4ff3d", background: "preto", style: "minimal", font: "mono" },
-    vibranium: { accent: "#8a7dff", accent2: "#d6c9ff", background: "naval", style: "reator", font: "classica" },
     ultron: { accent: "#ff2e55", accent2: "#c7d0d8", background: "preto", style: "tatico", font: "mono" },
+    sexta: { accent: "#b07bff", accent2: "#ff7ad9", background: "naval", style: "reator", font: "classica" },
+    matrix: { accent: "#3dff7a", accent2: "#ff3b2a", background: "preto", style: "minimal", font: "mono" },
+    hal: { accent: "#ff3b30", accent2: "#5aa9e6", background: "preto", style: "minimal", font: "classica" },
+    kinito: { accent: "#ff7ae0", accent2: "#8dff5a", background: "naval", style: "reator", font: "mono" },
+    verity: { accent: "#ffd21a", accent2: "#ff5a3c", background: "preto", style: "minimal", font: "tecnica" },
+    glados: { accent: "#ffb21c", accent2: "#e9eef2", background: "carbono", style: "tatico", font: "tecnica" },
+    auto: { accent: "#ff3a2e", accent2: "#eef3f6", background: "naval", style: "tatico", font: "tecnica" },
   };
-  const MODEL_NAMES = { jarvis: "JARVIS", ultron: "ULTRON", sexta: "SEXTA-FEIRA", mark3: "MARK III", hulk: "HULKBUSTER",
-    stealth: "STEALTH", vibranium: "VIBRANIUM", matrix: "MATRIX" };
+  const MODEL_NAMES = { jarvis: "JARVIS", ultron: "ULTRON", sexta: "SEXTA-FEIRA", matrix: "MATRIX", hal: "HAL 9000",
+    kinito: "KINITOPET", verity: "VERITY", glados: "GLaDOS", auto: "AUTO" };
   let timer = 0;
   let clock = 0;
   let current = null;

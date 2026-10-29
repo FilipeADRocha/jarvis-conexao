@@ -1,9 +1,15 @@
-/* The assistant's hologram, for every place it appears: the dialogue, the background window (orb),
-   CUSTOMIZAÇÃO and the phone app. A model is a set of layers of glowing traces exported from Blender
-   (tools/export_hologram.py for the JARVIS core, tools/avatar_builder.py for the others): each layer
-   keeps its spin and sway, and the shader is the "JARVIS Holograma" material (light pulses running
-   along every trace, shimmer, per-layer glow, AgX color and the compositor's bloom). The voice and
-   the microphone drive it; the "faça você mesmo" settings scale, recolor, explode and pace it. */
+/* The assistant's 3D model, for every place it appears: the dialogue, the background window (orb),
+   CUSTOMIZAÇÃO and the phone app. Two kinds of model come from Blender:
+   - "lines": a hologram of glowing traces (tools/export_hologram.py for the JARVIS core,
+     tools/avatar_builder.py for Ultron and Sexta-feira). Each layer keeps its spin and sway, and the shader
+     is the "JARVIS Holograma" material: light pulses running along every trace, shimmer, per-layer glow,
+     AgX color and the compositor's bloom;
+   - "solid": a shaded character (tools/character_builder.py: HAL 9000, KinitoPET, Verity, AUTO and the
+     Matrix sentinel; tools/glados_builder.py: GLaDOS, the user's own model with its textures), a tree of
+     named parts that BEHAVIORS below bring to life: blinking eyes, gills, the helm, tentacles, a head that
+     turns to the user, a face drawn live on a canvas.
+   The voice and the microphone drive both; the "faça você mesmo" settings scale, recolor, explode and
+   pace them. The canvas is transparent: the page shows around the model and through its gaps. */
 import * as THREE from "three";
 import { EffectComposer } from "./vendor/three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "./vendor/three/addons/postprocessing/OutputPass.js";
@@ -14,11 +20,12 @@ export const MODELS = {
   jarvis: { title: "JARVIS", path: "models/jarvis-holo" },
   ultron: { title: "ULTRON", path: "models/avatars/ultron" },
   sexta: { title: "SEXTA-FEIRA", path: "models/avatars/sexta" },
-  mark3: { title: "MARK III", path: "models/avatars/mark3" },
-  hulk: { title: "HULKBUSTER", path: "models/avatars/hulk" },
-  stealth: { title: "STEALTH", path: "models/avatars/stealth" },
-  vibranium: { title: "VIBRANIUM", path: "models/avatars/vibranium" },
   matrix: { title: "MATRIX", path: "models/avatars/matrix" },
+  hal: { title: "HAL 9000", path: "models/avatars/hal" },
+  kinito: { title: "KINITOPET", path: "models/avatars/kinito" },
+  verity: { title: "VERITY", path: "models/avatars/verity" },
+  glados: { title: "GLaDOS", path: "models/avatars/glados" },
+  auto: { title: "AUTO", path: "models/avatars/auto" },
 };
 // The JARVIS core was exported before layers had roles: by name.
 const JARVIS_ROLES = { "Anel Diagonal": "orbit", "Anel Equatorial": "orbit", "Arcos A": "detail", "Arcos B": "detail",
@@ -28,6 +35,7 @@ export const DEFAULTS = {
   parts: { shell: true, detail: true, glow: true, orbit: true },
 };
 const EXPLODE = { shell: 0, detail: 0.16, glow: -0.12, orbit: 0.4 };
+const TONES = { neutral: THREE.NeutralToneMapping, agx: THREE.AgXToneMapping, aces: THREE.ACESFilmicToneMapping };
 
 /** Which model a theme shows: the one chosen in "faça você mesmo", else the preset's own, else JARVIS. */
 export function modelOf(theme) {
@@ -79,7 +87,59 @@ const fragmentShader = `
     gl_FragColor = vec4(color * strength, 1.0);
   }`;
 
-const cache = new Map(); // model id -> Promise<{manifest, buffer}>
+// three's OutputPass shader (tone mapping, sRGB) that also writes coverage: the model's own alpha, or the
+// brightness of the glow around it. With the bloom added to the color only (see the constructor), the
+// canvas is transparent wherever nothing is drawn: no black square behind the model.
+const OUTPUT = `
+  precision highp float;
+  uniform sampler2D tDiffuse;
+  #include <tonemapping_pars_fragment>
+  #include <colorspace_pars_fragment>
+  varying vec2 vUv;
+  void main() {
+    gl_FragColor = texture2D( tDiffuse, vUv );
+    float cover = clamp( gl_FragColor.a, 0.0, 1.0 );
+    #ifdef LINEAR_TONE_MAPPING
+      gl_FragColor.rgb = LinearToneMapping( gl_FragColor.rgb );
+    #elif defined( REINHARD_TONE_MAPPING )
+      gl_FragColor.rgb = ReinhardToneMapping( gl_FragColor.rgb );
+    #elif defined( CINEON_TONE_MAPPING )
+      gl_FragColor.rgb = CineonToneMapping( gl_FragColor.rgb );
+    #elif defined( ACES_FILMIC_TONE_MAPPING )
+      gl_FragColor.rgb = ACESFilmicToneMapping( gl_FragColor.rgb );
+    #elif defined( AGX_TONE_MAPPING )
+      gl_FragColor.rgb = AgXToneMapping( gl_FragColor.rgb );
+    #elif defined( NEUTRAL_TONE_MAPPING )
+      gl_FragColor.rgb = NeutralToneMapping( gl_FragColor.rgb );
+    #endif
+    #ifdef SRGB_TRANSFER
+      gl_FragColor = sRGBTransferOETF( gl_FragColor );
+    #endif
+    vec3 shown = clamp( gl_FragColor.rgb, 0.0, 1.0 );
+    // A wide glow fades out before the canvas edge, where it would show the canvas's square.
+    float edge = smoothstep( 0.0, 0.14, min( min( vUv.x, 1.0 - vUv.x ), min( vUv.y, 1.0 - vUv.y ) ) );
+    shown *= mix( edge, 1.0, cover );
+    gl_FragColor = vec4( shown, max( cover, max( shown.r, max( shown.g, shown.b ) ) ) );
+  }`;
+
+const cache = new Map(); // model id -> Promise<{manifest, buffer, images}>
+
+// A model's textures travel inside its .bin as JPEG: decoded once, shared by every hologram of the page.
+async function decodeImages(manifest, buffer) {
+  return Promise.all((manifest.images || []).map(async (spec) => {
+    const url = URL.createObjectURL(new Blob([new Uint8Array(buffer, spec.offset, spec.length)], { type: spec.type || "image/jpeg" }));
+    const image = new Image();
+    image.src = url;
+    try {
+      await image.decode();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    return image;
+  }));
+}
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+const ease = (current, goal, rate, dt) => current + (goal - current) * Math.min(1, dt * rate);
 
 // A driven channel from the exporter: constant, spin ("frame*rate*vel"), sway or voice scale.
 function driven(spec, frame, spinFrame, voice) {
@@ -108,10 +168,368 @@ function defaultVoice() {
   return { state: voice.state || "idle", level };
 }
 
+// A soft studio for the solid models' reflections: a bright ceiling, a dim floor and three softboxes.
+function studio(renderer) {
+  const scene = new THREE.Scene();
+  const room = new THREE.SphereGeometry(10, 48, 24);
+  const position = room.attributes.position;
+  const colors = [];
+  for (let index = 0; index < position.count; index += 1) {
+    const up = position.getY(index) / 10;
+    const light = up > 0 ? 0.32 + 0.6 * up : 0.32 + 0.28 * up;
+    colors.push(light * 0.93, light * 0.97, light);
+  }
+  room.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  scene.add(new THREE.Mesh(room, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  for (const [width, height, x, y, z, power] of [[7, 5, -5, 5, 7, 7], [4, 7, 7, 1, -4, 4.5], [10, 2, 0, 9, 1, 3.5]]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color().setScalar(power), side: THREE.DoubleSide }));
+    panel.position.set(x, y, z);
+    panel.lookAt(0, 0, 0);
+    scene.add(panel);
+  }
+  const generator = new THREE.PMREMGenerator(renderer);
+  const texture = generator.fromScene(scene, 0.04).texture;
+  generator.dispose();
+  return texture;
+}
+
+/* ---------- the characters' life (solid models): one function per model, called every frame ----------
+   rig: the parts by name (node), their rest pose (reset before each frame), per-model state, the face canvas.
+   ctx: t (animation seconds, paced), dt, time (real seconds), state and the voice (level, talk), float,
+   secondary (the "órbitas" speed), pointer (-1..1 over the canvas), motion (the orb window's speed, px/s),
+   roam (half extents where the model may wander, dialogue only), camera. */
+
+const wobble = (t, seed) => 0.5 * Math.sin(t * 1.3 + seed) + 0.3 * Math.sin(t * 2.7 + seed * 1.7) + 0.2 * Math.sin(t * 4.1 + seed * 2.3);
+
+function blinkAmount(state, time, every = [2.5, 6], length = 0.16) {
+  state.nextBlink ??= time + 1.5 + Math.random() * 2;
+  if (time < state.nextBlink) return 0;
+  const k = (time - state.nextBlink) / length;
+  if (k >= 1) {
+    state.nextBlink = time + every[0] + Math.random() * (every[1] - every[0]);
+    return 0;
+  }
+  return Math.sin(k * Math.PI);
+}
+
+function glance(state, ctx, reach = 1) {
+  // Where idle eyes wander: a new point every few seconds, the mouse pointer when it moves.
+  if (ctx.time > (state.nextGlance ?? 0)) {
+    state.glanceGoal = { x: (Math.random() - 0.5) * reach, y: (Math.random() - 0.5) * reach * 0.6 };
+    state.nextGlance = ctx.time + 1.2 + Math.random() * 3.5;
+  }
+  const goal = ctx.pointer.active ? ctx.pointer : state.glanceGoal || { x: 0, y: 0 };
+  state.gaze ??= { x: 0, y: 0 };
+  state.gaze.x = ease(state.gaze.x, goal.x, 9, ctx.dt);
+  state.gaze.y = ease(state.gaze.y, goal.y, 9, ctx.dt);
+  return state.gaze;
+}
+
+const _point = new THREE.Vector3();
+const _forward = new THREE.Vector3();
+const _turn = new THREE.Quaternion();
+
+/** Turns `object` (resting with its front along -Y) toward a point in world space, at most `limit` radians. */
+function lookAt(object, base, world, limit, state, key, rate, dt) {
+  object.parent.updateWorldMatrix(true, false);
+  _point.copy(world);
+  object.parent.worldToLocal(_point);
+  _point.sub(base.position).normalize();
+  _forward.set(0, -1, 0).applyQuaternion(base.quaternion);
+  const angle = _forward.angleTo(_point);
+  if (angle > limit) _point.lerp(_forward, 1 - limit / angle).normalize();
+  _turn.setFromUnitVectors(_forward, _point).multiply(base.quaternion);
+  state[key] ??= base.quaternion.clone();
+  state[key].slerp(_turn, Math.min(1, dt * rate));
+  object.quaternion.copy(state[key]);
+}
+
+const VERITY_YELLOW = "#ffd21a";
+
+function drawVerity(face, look) {
+  const { context: c, canvas } = face;
+  const size = canvas.width;
+  const px = (x) => size / 2 + x * (size / 2);
+  const pz = (z) => size / 2 - z * (size / 2);
+  const unit = size / 2;
+  const sketch = look.glitch ? face.scratch : canvas;
+  const g = look.glitch ? face.scratchContext : c;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalCompositeOperation = "source-over";
+  g.fillStyle = look.yellow;
+  g.fillRect(0, 0, size, size);
+  const oval = (x, z, rx, rz, fill) => {
+    g.beginPath();
+    g.ellipse(px(x), pz(z), rx * unit, rz * unit, 0, 0, Math.PI * 2);
+    g.fillStyle = fill;
+    g.fill();
+  };
+  if (!look.glitch) {
+    const squint = 1 - 0.92 * look.blink;
+    const eye = look.open > 0.05 ? [0.068, 0.12] : [0.075, 0.135];
+    for (const side of [-1, 1]) oval(side * 0.24, 0.17, eye[0], Math.max(0.01, eye[1] * squint), "#111");
+    if (look.open > 0.05) { // talking: the wide open "D" mouth with the tongue at the bottom
+      const depth = 0.16 + 0.42 * look.open;
+      g.beginPath();
+      g.moveTo(px(-0.47), pz(-0.07));
+      g.quadraticCurveTo(px(0), pz(-0.15), px(0.47), pz(-0.07));
+      g.bezierCurveTo(px(0.45), pz(-0.07 - depth * 0.95), px(-0.45), pz(-0.07 - depth * 0.95), px(-0.47), pz(-0.07));
+      g.closePath();
+      g.fillStyle = "#151010";
+      g.fill();
+      g.save();
+      g.clip();
+      g.beginPath();
+      g.ellipse(px(0.02), pz(-0.07 - depth * 0.78), 0.27 * unit, 0.16 * unit * (0.6 + look.open * 0.5), 0, 0, Math.PI * 2);
+      g.fillStyle = "#e9a31c";
+      g.fill();
+      g.restore();
+    } else { // the thin smile with its curled ends
+      g.beginPath();
+      g.moveTo(px(-0.72), pz(-0.2));
+      g.quadraticCurveTo(px(0), pz(-1.0), px(0.72), pz(-0.2));
+      g.strokeStyle = "#111";
+      g.lineWidth = 0.034 * unit;
+      g.lineCap = "round";
+      g.stroke();
+      for (const side of [-1, 1]) {
+        g.save();
+        g.translate(px(side * 0.73), pz(-0.19));
+        g.rotate(side * -0.55);
+        g.beginPath();
+        g.ellipse(0, 0, 0.026 * unit, 0.05 * unit, 0, 0, Math.PI * 2);
+        g.fillStyle = "#111";
+        g.fill();
+        g.restore();
+      }
+    }
+    face.texture.needsUpdate = true;
+    return;
+  }
+  // The glitch: hollow eyes in a bruised shade and a torn grin full of teeth.
+  for (const side of [-1, 1]) {
+    const shade = g.createRadialGradient(px(side * 0.23), pz(0.2), 0, px(side * 0.23), pz(0.2), 0.24 * unit);
+    shade.addColorStop(0, "rgba(60, 12, 18, 0.95)");
+    shade.addColorStop(0.55, "rgba(120, 40, 30, 0.55)");
+    shade.addColorStop(1, "rgba(160, 80, 20, 0)");
+    g.fillStyle = shade;
+    g.fillRect(0, 0, size, size);
+    oval(side * 0.23, 0.2, 0.05, 0.1, "#050505");
+  }
+  const corner = 0.8;
+  const top = (x) => -0.08 - 0.3 * (1 - (x / corner) ** 2);
+  const bottom = (x) => -0.04 - 0.66 * (1 - (x / corner) ** 2) ** 0.8;
+  g.beginPath();
+  for (let i = 0; i <= 40; i += 1) {
+    const x = -corner + (2 * corner * i) / 40;
+    const jag = i % 2 ? 0.018 : -0.012;
+    if (i === 0) g.moveTo(px(x), pz(top(x)));
+    else g.lineTo(px(x), pz(top(x) + jag * Math.random()));
+  }
+  for (let i = 40; i >= 0; i -= 1) {
+    const x = -corner + (2 * corner * i) / 40;
+    g.lineTo(px(x), pz(bottom(x) - 0.02 * Math.random()));
+  }
+  g.closePath();
+  g.fillStyle = "#070505";
+  g.fill();
+  g.fillStyle = "#f4f1ea";
+  for (const [edge, down, count] of [[top, -1, 12], [bottom, 1, 11]]) {
+    for (let i = 0; i < count; i += 1) {
+      const x = -corner * 0.86 + (1.72 * corner * (i + 0.5)) / count;
+      const z = edge(x);
+      const width = 0.11 * (1 - Math.abs(x) / corner * 0.5);
+      const height = (0.14 + 0.03 * Math.sin(i * 2.3)) * (1 - Math.abs(x) / corner * 0.55);
+      g.save();
+      g.translate(px(x), pz(z));
+      g.rotate((x / corner) * 0.35 * down);
+      g.fillRect((-width / 2) * unit, down < 0 ? 0 : -height * unit, width * unit * 0.86, height * unit);
+      g.restore();
+    }
+  }
+  g.strokeStyle = "#090606";
+  g.lineWidth = 0.012 * unit;
+  for (let i = 0; i < 26; i += 1) { // ink scratches around the grin
+    const x = -corner + Math.random() * corner * 2;
+    const z = (Math.random() < 0.5 ? top(x) : bottom(x)) + (Math.random() - 0.5) * 0.06;
+    g.beginPath();
+    g.moveTo(px(x), pz(z));
+    g.lineTo(px(x + (Math.random() - 0.5) * 0.1), pz(z + (Math.random() - 0.5) * 0.1));
+    g.stroke();
+  }
+  // Torn into bands, shifted sideways, with a few dead blocks: the picture of a glitch.
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.fillStyle = look.yellow;
+  c.fillRect(0, 0, size, size);
+  let y = 0;
+  while (y < size) {
+    const band = 6 + Math.random() * 44;
+    const shift = Math.random() < 0.3 ? (Math.random() - 0.5) * 44 : 0;
+    c.drawImage(sketch, 0, y, size, band, shift, y, size, band);
+    y += band;
+  }
+  c.globalCompositeOperation = "multiply";
+  c.globalAlpha = 0.5;
+  c.drawImage(sketch, 7, 0);
+  c.globalAlpha = 1;
+  c.globalCompositeOperation = "source-over";
+  for (let i = 0; i < 7; i += 1) {
+    c.fillStyle = ["#ff2a2a", "#2af0ff", "#111", "#fff27a"][i % 4];
+    c.globalAlpha = 0.35 + Math.random() * 0.4;
+    c.fillRect(Math.random() * size, Math.random() * size, 20 + Math.random() * 120, 2 + Math.random() * 9);
+  }
+  c.globalAlpha = 1;
+  face.texture.needsUpdate = true;
+}
+
+const BEHAVIORS = {
+  // HAL 9000 stands still: no float, no turn; only the eye's light lives (the common glow below).
+  hal() {},
+
+  kinito(rig, ctx) {
+    const s = rig.state;
+    const body = rig.node("corpo");
+    const head = rig.node("cabeca");
+    // Riding: while the background window is dragged he leans into the motion on his green board.
+    const speed = Math.hypot(ctx.motion.x, ctx.motion.y);
+    s.ride = ease(s.ride ?? 0, speed > 60 ? 1 : 0, speed > 60 ? 7 : 2.2, ctx.dt);
+    s.lean = ease(s.lean ?? 0, clamp(ctx.motion.x / 900, -0.42, 0.42), 6, ctx.dt);
+    const board = rig.node("prancha");
+    board.visible = s.ride > 0.04;
+    board.scale.multiplyScalar(0.2 + 0.8 * s.ride);
+    board.rotateY(-s.lean * 0.35);
+    body.rotateY(s.lean * s.ride);
+    body.position.z += 0.06 * s.ride + 0.015 * ctx.float * Math.sin(ctx.t * 2.1) * (1 - s.ride);
+    body.scale.z *= 1 + clamp(-ctx.motion.y / 4000, -0.08, 0.08) * s.ride;
+    head.rotateY(0.07 * Math.sin(ctx.t * 0.9) + s.lean * 0.25 * s.ride);
+    head.rotateX(0.04 * Math.sin(ctx.t * 0.7 + 1) - ctx.talk * 0.35 * Math.abs(Math.sin(ctx.time * 8.5)));
+    rig.each("gill", (gill, i) => {
+      gill.rotateY((0.13 + 0.25 * s.ride + ctx.talk * 0.4) * Math.sin(ctx.t * (3 + s.ride * 5) * ctx.secondary + i * 1.1));
+    });
+    const blink = blinkAmount(s, ctx.time);
+    const gaze = glance(s, ctx, 0.8);
+    const lookX = clamp(gaze.x * 0.35 + ctx.motion.x / 2500, -0.45, 0.45);
+    for (const side of ["e", "d"]) {
+      rig.node(`palpebra_${side}`).rotateX(blink * 0.75);
+      const pupil = rig.node(`pupila_${side}`);
+      pupil.rotateZ(lookX);
+      pupil.rotateX(clamp(-gaze.y * 0.3, -0.3, 0.3));
+    }
+  },
+
+  verity(rig, ctx) {
+    const s = rig.state;
+    const ball = rig.node("bola");
+    ball.rotateZ(0.09 * Math.sin(ctx.t * 0.55));
+    ball.rotateX(0.05 * Math.sin(ctx.t * 0.8 + 1) - ctx.talk * 0.12 * Math.abs(Math.sin(ctx.time * 7)));
+    ball.position.z += 0.04 * ctx.float * Math.sin(ctx.t * 1.5);
+    // Glitches come only while nobody is talking to it.
+    const quiet = !["armed", "thinking", "speaking"].includes(ctx.state);
+    s.nextGlitch ??= ctx.time + 4 + Math.random() * 6;
+    if (!quiet) s.nextGlitch = Math.max(s.nextGlitch, ctx.time + 5);
+    if (quiet && ctx.time >= s.nextGlitch) {
+      s.glitchUntil = ctx.time + 0.25 + Math.random() * 0.7;
+      s.nextGlitch = ctx.time + 7 + Math.random() * 15;
+    }
+    const glitch = quiet && ctx.time < (s.glitchUntil ?? 0);
+    s.open = ease(s.open ?? 0, ctx.speaking ? clamp(0.3 + ctx.talk * 2.4, 0, 1) : 0, 16, ctx.dt);
+    const blink = glitch ? 0 : blinkAmount(s, ctx.time, [3, 7]);
+    const yellow = ctx.config.shell || VERITY_YELLOW;
+    if (glitch) {
+      ball.position.x += (Math.random() - 0.5) * 0.09;
+      ball.position.z += (Math.random() - 0.5) * 0.05;
+      ball.rotateZ((Math.random() - 0.5) * 0.35);
+      ball.scale.x *= 1 + (Math.random() - 0.5) * 0.12;
+    }
+    const key = glitch ? `g${Math.floor(ctx.time * 18)}` : `${s.open.toFixed(2)}|${blink.toFixed(2)}|${yellow}`;
+    if (rig.face && key !== s.drawn) {
+      s.drawn = key;
+      drawVerity(rig.face, { open: s.open, blink, glitch, yellow });
+      rig.material("costas")?.color.set(yellow);
+    }
+  },
+
+  glados(rig, ctx) {
+    const s = rig.state;
+    // The body hangs from the ceiling plate and sways (as in the Blender loop: a few degrees each way).
+    const body = rig.node("corpo");
+    body.rotateX(0.045 * Math.sin(ctx.t * 0.47) * ctx.float);
+    body.rotateY(0.06 * Math.sin(ctx.t * 0.31 + 1) * ctx.float);
+    body.rotateZ(0.035 * Math.sin(ctx.t * 0.23 + 2) * ctx.float);
+    // The head turns to the user (the screen), drawn a little toward the mouse, with a glance now and then.
+    if (ctx.time > (s.nextAside ?? 0)) {
+      s.aside = Math.random() < 0.35 ? { x: (Math.random() - 0.5) * 3.2, y: (Math.random() - 0.3) * 1.6, until: ctx.time + 1 + Math.random() * 1.4 } : null;
+      s.nextAside = ctx.time + 3 + Math.random() * 5;
+    }
+    const aside = s.aside && ctx.time < s.aside.until && !ctx.speaking ? s.aside : { x: 0, y: 0 };
+    const reach = ctx.camera.position.z * 0.32;
+    _point.set((ctx.pointer.x * 0.8 + aside.x) * reach, (ctx.pointer.y * 0.8 + aside.y) * reach, ctx.camera.position.z);
+    const head = rig.node("cabeca");
+    lookAt(head, rig.base.get(head), _point, 1.15, s, "look", 4.5, ctx.dt);
+    head.rotateX(-ctx.talk * 0.3 * Math.sin(ctx.time * 9));
+    head.rotateY(0.06 * Math.sin(ctx.t * 0.8));
+  },
+
+  auto(rig, ctx) {
+    const s = rig.state;
+    // The helm steers: small turns back and forth and, now and then, a firmer correction.
+    if (ctx.time > (s.nextCorrection ?? 0)) {
+      s.correctionGoal = (Math.random() - 0.5) * 0.7;
+      s.nextCorrection = ctx.time + 4 + Math.random() * 6;
+    }
+    s.correction = ease(s.correction ?? 0, ctx.time < s.nextCorrection - 2.5 ? s.correctionGoal : 0, 1.6, ctx.dt);
+    const steer = (0.1 * Math.sin(ctx.t * 0.8) + 0.04 * Math.sin(ctx.t * 2.3 + 1) + s.correction) * ctx.secondary;
+    rig.node("roda").rotateY(steer + (ctx.state === "thinking" ? ctx.t * 1.2 % (Math.PI * 2) : 0));
+    const helm = rig.node("leme");
+    helm.rotateX(0.035 * Math.sin(ctx.t * 0.55) * ctx.float - ctx.talk * 0.1);
+    helm.rotateZ(0.04 * Math.sin(ctx.t * 0.42 + 1) * ctx.float);
+  },
+
+  matrix(rig, ctx) {
+    const s = rig.state;
+    const body = rig.node("corpo");
+    // Every tentacle bends a little at each link, more toward the tip; the wave runs down to it.
+    const pace = ctx.secondary * (1 + 1.4 * (s.speed ?? 0)) * (ctx.state === "thinking" ? 1.8 : 1);
+    s.wave = (s.wave ?? 0) + ctx.dt * 1.5 * pace;
+    rig.chains.forEach((links, k) => {
+      const n = links.length;
+      links.forEach((link, i) => {
+        const tip = 0.35 + (i + 1) / n;
+        const phase = s.wave - i * 0.5 + k * 1.7;
+        link.rotateX(0.085 * Math.sin(phase) * tip);
+        link.rotateZ(0.07 * Math.sin(phase * 0.83 + k) * tip);
+      });
+    });
+    rig.each("arm", (arm, i) => arm.rotateX(0.25 * Math.sin(ctx.t * 2.4 + i * 1.3) * Math.sin(ctx.t * 0.7 + i)));
+    body.position.z += 0.06 * ctx.float * Math.sin(ctx.t * 1.05);
+    body.rotateY(0.05 * Math.sin(ctx.t * 0.7));
+    // In the dialogue it hunts around the screen: a smooth wandering path inside the stage.
+    if (ctx.roam) {
+      s.roamT = (s.roamT ?? Math.random() * 100) + ctx.dt * (ctx.calm ? 0.25 : 1);
+      const t = s.roamT;
+      const x = ctx.roam.x * Math.sin(t * 0.21 + 0.8 * Math.sin(t * 0.053));
+      const z = ctx.roam.z * Math.sin(t * 0.33 + 1.3) * Math.cos(t * 0.071);
+      const vx = s.lastX === undefined ? 0 : (x - s.lastX) / Math.max(ctx.dt, 1e-3);
+      s.lastX = x;
+      s.speed = ease(s.speed ?? 0, clamp(Math.abs(vx) / 0.6, 0, 1), 3, ctx.dt);
+      s.heading = ease(s.heading ?? 0, clamp(vx * 0.9, -0.75, 0.75), 2.5, ctx.dt);
+      rig.group.position.x += x;
+      rig.group.position.z += z;
+      body.rotateZ(s.heading);
+      body.rotateY(-s.heading * 0.25);
+    } else {
+      body.rotateZ(0.14 * Math.sin(ctx.t * 0.35));
+    }
+  },
+};
+
 export class Hologram {
   /**
    * host: the element it fills; options: canvas, load(path, kind) -> json | ArrayBuffer, visible() -> bool,
-   * voice() -> {state, level}, interactive (drag to turn, wheel to zoom), fit (share of the smaller side).
+   * voice() -> {state, level}, interactive (drag to turn, wheel to zoom), fit (share of the smaller side),
+   * motion() -> {x, y} (how fast the window moves, px/s), roam (a model that wanders may leave its frame:
+   * then frame() -> {width, height} is the frame it keeps its size by), onModel(id, manifest).
    */
   constructor(host, options = {}) {
     this.host = host;
@@ -119,9 +537,13 @@ export class Hologram {
     this.config = { ...DEFAULTS, parts: { ...DEFAULTS.parts } };
     this.model = "";
     this.layers = [];
-    this.view = { yaw: 0, pitch: 0, zoom: 1, velocity: 0, drag: null };
+    this.rig = null;
+    this.ready = false;
+    this.view = { yaw: 0, pitch: 0, zoom: 1, velocity: 0, drag: null, ppu: 100 };
     this.frame = 0;
     this.ticket = 0;
+    this.pointer = { x: 0, y: 0, goalX: 0, goalY: 0, at: 0, active: false };
+    this.motion = { x: 0, y: 0 };
     const canvas = options.canvas || document.createElement("canvas");
     if (!canvas.parentNode) host.prepend(canvas);
     canvas.classList.add("no-hue"); // drawn in its own colors: the theme's hue shift is not for it
@@ -146,21 +568,52 @@ export class Hologram {
     this.world.add(this.root);
     this.turn.add(this.world);
     this.scene.add(this.turn);
+    // The solid models' light, fixed to the camera: a key from the upper left, a cool rim behind, a soft fill.
+    this.lights = new THREE.Group();
+    const key = new THREE.DirectionalLight(0xfff6ee, 2.6);
+    key.position.set(-3, 4, 5);
+    const rim = new THREE.DirectionalLight(0xbfe4ff, 2.2);
+    rim.position.set(4, 3, -5);
+    const fill = new THREE.DirectionalLight(0xdfe8ff, 0.7);
+    fill.position.set(4, -2, 3);
+    this.lights.add(new THREE.HemisphereLight(0xe8f2ff, 0x1a1c22, 0.9), key, rim, fill);
+    this.lights.visible = false;
+    this.scene.add(this.lights);
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.3, 0, 0.6);
+    // The bloom adds light to the color but leaves the alpha alone: the model's own coverage survives.
+    const add = this.bloom.blendMaterial;
+    add.blending = THREE.CustomBlending;
+    add.blendEquation = THREE.AddEquation;
+    add.blendSrc = THREE.SrcAlphaFactor;
+    add.blendDst = THREE.OneFactor;
+    add.blendSrcAlpha = THREE.ZeroFactor;
+    add.blendDstAlpha = THREE.OneFactor;
     this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
+    const output = new OutputPass();
+    output.material.fragmentShader = OUTPUT;
+    output.material.needsUpdate = true;
+    this.composer.addPass(output);
     this.clock = { frame: 0, spin: 0, orbit: 0, tempo: 0, pulse: 0 };
     this.smooth = { level: 0, voice: 0, intensity: 1, spin: 1, pulse: 1, born: 0 };
     this.last = performance.now();
-    new ResizeObserver(() => {
+    const observer = new ResizeObserver(() => {
       this.resize();
       this.wake();
-    }).observe(host);
+    });
+    observer.observe(host);
+    observer.observe(canvas);
     if (options.interactive) this.setupInput();
     document.addEventListener("visibilitychange", () => this.wake());
+    window.addEventListener("pointermove", (event) => {
+      const rect = this.canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      this.pointer.goalX = clamp((event.clientX - rect.left - rect.width / 2) / (rect.width / 2), -1.5, 1.5);
+      this.pointer.goalY = clamp(-(event.clientY - rect.top - rect.height / 2) / (rect.height / 2), -1.5, 1.5);
+      this.pointer.at = performance.now();
+    }, { passive: true });
   }
 
   async load(id) {
@@ -172,7 +625,7 @@ export class Hologram {
         return kind === "json" ? response.json() : response.arrayBuffer();
       });
       const job = Promise.all([loader(`${path}.json`, "json"), loader(`${path}.bin`, "binary")])
-        .then(([manifest, buffer]) => ({ manifest, buffer }));
+        .then(async ([manifest, buffer]) => ({ manifest, buffer, images: await decodeImages(manifest, buffer) }));
       cache.set(id, job);
       job.catch(() => cache.delete(id));
     }
@@ -183,7 +636,7 @@ export class Hologram {
   async setModel(id) {
     if (this.failed) return;
     id = MODELS[id] ? id : "jarvis";
-    if (id === this.model && this.layers.length) return;
+    if (id === this.model && this.ready) return;
     const ticket = ++this.ticket;
     this.host.classList.add("is-loading");
     let data;
@@ -196,7 +649,7 @@ export class Hologram {
       return;
     }
     if (ticket !== this.ticket) return;
-    this.build(id, data.manifest, data.buffer);
+    this.build(id, data.manifest, data.buffer, data.images);
     this.host.classList.remove("is-loading", "is-fallback");
     delete this.host.dataset.fallback;
     this.host.classList.add("is-ready");
@@ -204,14 +657,54 @@ export class Hologram {
     this.options.onModel?.(id, data.manifest);
   }
 
-  build(id, manifest, buffer) {
+  clear() {
     for (const layer of this.layers) {
       this.root.remove(layer);
       layer.geometry.dispose();
       layer.material.dispose();
     }
+    this.layers = [];
+    if (this.rig) {
+      this.root.remove(this.rig.group);
+      for (const geometry of this.rig.geometries) geometry.dispose();
+      for (const material of this.rig.materials) {
+        for (const key of ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap"]) material[key]?.dispose();
+        material.dispose();
+      }
+      this.rig = null;
+    }
+  }
+
+  build(id, manifest, buffer, images = []) {
+    this.clear();
     this.model = id;
     this.manifest = manifest;
+    this.solid = manifest.kind === "solid";
+    this.roaming = Boolean(this.options.roam && manifest.roam);
+    this.host.classList.toggle("is-solid", this.solid);
+    this.host.classList.toggle("is-roaming", this.roaming);
+    if (this.solid) this.buildSolid(manifest, buffer, images);
+    else this.buildLines(manifest, buffer);
+    const look = this.solid ? manifest.look || {} : {};
+    const glare = (this.solid ? look.bloom : manifest.bloom) || { threshold: 0.6, strength: 0.75 };
+    this.bloom.strength = glare.strength * 0.4;
+    this.bloom.threshold = glare.threshold;
+    this.bloom.radius = glare.radius ?? 0;
+    this.renderer.toneMapping = this.solid ? TONES[look.tone] ?? THREE.NeutralToneMapping : THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 2 ** ((this.solid ? look.exposure : manifest.view?.exposure) ?? 0);
+    this.lights.visible = this.solid;
+    if (this.solid && !this.environment) this.environment = studio(this.renderer);
+    this.scene.environment = this.solid ? this.environment : null;
+    this.root.position.set(0, 0, 0);
+    this.root.rotation.set(0, 0, 0);
+    this.smooth.born = 0;
+    this.ready = true;
+    this.apply();
+    this.resize();
+    this.wake();
+  }
+
+  buildLines(manifest, buffer) {
     const shader = manifest.shader;
     this.layers = manifest.objects.map((item) => {
       const view = (spec, Type) => new Type(buffer, spec.offset, spec.length);
@@ -237,14 +730,115 @@ export class Hologram {
       this.root.add(lines);
       return lines;
     });
-    const glare = manifest.bloom || { threshold: 0.6, strength: 0.75 };
-    this.bloom.strength = glare.strength * 0.4;
-    this.bloom.threshold = glare.threshold;
-    this.renderer.toneMappingExposure = 2 ** (manifest.view?.exposure ?? 0);
-    this.smooth.born = 0;
-    this.apply();
-    this.resize();
-    this.wake();
+  }
+
+  solidMaterial(spec, images = []) {
+    const options = {
+      color: new THREE.Color().setRGB(...spec.color), metalness: spec.metal ?? 0, roughness: spec.rough ?? 0.5,
+      transparent: (spec.opacity ?? 1) < 1, opacity: spec.opacity ?? 1, flatShading: Boolean(spec.flat),
+      side: spec.double ? THREE.DoubleSide : THREE.FrontSide, vertexColors: Boolean(spec.colors),
+    };
+    const material = spec.coat ? new THREE.MeshPhysicalMaterial({ ...options, clearcoat: spec.coat, clearcoatRoughness: 0.06 })
+      : new THREE.MeshStandardMaterial(options);
+    material.name = spec.name;
+    if (spec.glow) {
+      material.emissive.setRGB(...spec.emissive);
+      material.emissiveIntensity = spec.glow;
+      if (spec.colors) { // the vertex colors paint the light too (HAL's eye: white core, red, dark rim)
+        material.onBeforeCompile = (shader) => {
+          shader.fragmentShader = shader.fragmentShader.replace("vec3 totalEmissiveRadiance = emissive;",
+            "vec3 totalEmissiveRadiance = emissive * vColor.rgb;");
+        };
+        material.customProgramCacheKey = () => "glow-colors";
+      }
+    }
+    material.userData = { spec, glow: spec.glow || 0, tint: spec.tint || "" };
+    // Textures from Blender (GLaDOS): the color, the relief, roughness (G) and metal (B), what glows.
+    const maps = spec.maps || {};
+    const texture = (index, srgb) => {
+      const map = new THREE.Texture(images[index]);
+      map.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      map.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+      map.needsUpdate = true;
+      return map;
+    };
+    if (images[maps.color]) material.map = texture(maps.color, true);
+    if (images[maps.normal]) material.normalMap = texture(maps.normal, false);
+    if (images[maps.rm]) {
+      material.roughnessMap = material.metalnessMap = texture(maps.rm, false);
+      material.roughness = 1;
+      material.metalness = 1;
+    }
+    if (images[maps.glow]) material.emissiveMap = texture(maps.glow, true);
+    if (spec.canvas) { // a texture drawn live by the model's behavior (Verity's face)
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 512;
+      const scratch = document.createElement("canvas");
+      scratch.width = scratch.height = 512;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 4;
+      material.map = texture;
+      material.color.setRGB(1, 1, 1);
+      material.userData.face = { canvas, context: canvas.getContext("2d"), scratch, scratchContext: scratch.getContext("2d"), texture };
+    }
+    return material;
+  }
+
+  buildSolid(manifest, buffer, images) {
+    const view = (spec, Type) => new Type(buffer, spec.offset, spec.length);
+    const materials = manifest.materials.map((spec) => this.solidMaterial(spec, images));
+    const geometries = manifest.meshes.map((spec) => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(view(spec.position, Float32Array), 3));
+      geometry.setAttribute("normal", new THREE.BufferAttribute(view(spec.normal, Int8Array), 3, true));
+      if (spec.uv) geometry.setAttribute("uv", new THREE.BufferAttribute(view(spec.uv, Float32Array), 2));
+      if (spec.color) geometry.setAttribute("color", new THREE.BufferAttribute(view(spec.color, Float32Array), 3));
+      geometry.setIndex(new THREE.BufferAttribute(view(spec.index, spec.index.type === "uint32" ? Uint32Array : Uint16Array), 1));
+      for (const group of spec.groups) geometry.addGroup(group.start, group.count, group.material);
+      return geometry;
+    });
+    const group = new THREE.Group(); // what the engine moves (scale, roaming); the model's own root is inside
+    const nodes = manifest.nodes.map((spec) => {
+      const object = spec.mesh !== undefined ? new THREE.Mesh(geometries[spec.mesh], materials) : new THREE.Group();
+      object.name = spec.name;
+      object.position.fromArray(spec.position);
+      object.quaternion.fromArray(spec.quaternion);
+      object.scale.fromArray(spec.scale);
+      object.visible = !spec.hidden;
+      object.userData = { role: spec.role || "shell", tags: spec.tags || {} };
+      return object;
+    });
+    manifest.nodes.forEach((spec, index) => (spec.parent >= 0 ? nodes[spec.parent] : group).add(nodes[index]));
+    this.root.add(group);
+    const byName = new Map(nodes.map((object) => [object.name, object]));
+    const spare = new THREE.Object3D(); // stands in for a part a model does not have
+    const chains = new Map();
+    for (const object of nodes) {
+      const { chain, link } = object.userData.tags;
+      if (chain !== undefined) {
+        if (!chains.has(chain)) chains.set(chain, []);
+        chains.get(chain)[link] = object;
+      }
+    }
+    // "Explodir peças": a part hung from a pivot (not from another part) moves away from that pivot.
+    const spread = [];
+    for (const object of nodes) {
+      if (!object.isMesh || object.parent?.isMesh) continue;
+      object.geometry.computeBoundingSphere();
+      const center = object.geometry.boundingSphere.center.clone().multiply(object.scale).applyQuaternion(object.quaternion).add(object.position);
+      if (center.lengthSq() > 1e-6) spread.push([object, center.normalize().multiplyScalar(0.35)]);
+    }
+    this.rig = {
+      group, nodes, geometries, materials, chains: [...chains.values()], spread, state: {}, clock: 0,
+      base: new Map(nodes.map((object) => [object, { position: object.position.clone(), quaternion: object.quaternion.clone(),
+        scale: object.scale.clone(), visible: object.visible }])),
+      glows: materials.filter((material) => material.userData.glow > 0),
+      face: materials.find((material) => material.userData.face)?.userData.face || null,
+      node: (name) => byName.get(name) || spare,
+      material: (name) => materials.find((material) => material.name === name),
+      each: (tag, fn) => nodes.forEach((object) => object.userData.tags[tag] !== undefined && fn(object, object.userData.tags[tag])),
+    };
   }
 
   /** The "faça você mesmo" settings (DEFAULTS' keys); colors are "#rrggbb" or "" for the model's own. */
@@ -255,8 +849,23 @@ export class Hologram {
   }
 
   apply() {
-    if (!this.layers.length) return;
     const config = this.config;
+    if (this.rig) {
+      for (const material of this.rig.materials) {
+        const { spec, tint } = material.userData;
+        if (tint === "shell" && !material.userData.face) {
+          if (config.shell) material.color.set(config.shell);
+          else material.color.setRGB(...spec.color);
+        }
+        if (tint === "glow") {
+          if (config.glow) material.emissive.set(config.glow);
+          else material.emissive.setRGB(...spec.emissive);
+        }
+      }
+      this.rig.state.drawn = ""; // a face drawn in the old color is drawn again
+      return;
+    }
+    if (!this.layers.length) return;
     const shader = this.manifest.shader;
     const hot = config.glow ? linear(config.glow) : new THREE.Vector3(...shader.hot);
     for (const layer of this.layers) {
@@ -275,20 +884,27 @@ export class Hologram {
 
   resize() {
     if (!this.renderer) return;
-    const rect = this.host.getBoundingClientRect();
-    const width = Math.max(1, Math.round(rect.width));
-    const height = Math.max(1, Math.round(rect.height));
+    let box = this.canvas.getBoundingClientRect();
+    if (!box.width || !box.height) box = this.host.getBoundingClientRect();
+    const width = Math.max(1, Math.round(box.width));
+    const height = Math.max(1, Math.round(box.height));
+    // The model keeps its size by its frame: the canvas itself, or (a model roaming past it) the frame it left.
+    const frame = (this.roaming && this.options.frame?.()) || { width, height };
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
-    const distance = (this.manifest?.camera?.distance ?? 6.1) / this.view.zoom;
+    const reach = this.manifest?.camera?.distance ?? 6.1;
+    const distance = reach / this.view.zoom;
     this.camera.position.set(0, 0, distance); // Blender's camera at (0, -distance, 0), looking along +Y
     this.camera.aspect = width / height;
-    const halfTan = 1.2 / (this.manifest?.camera?.distance ?? 6.1) / (this.options.fit ?? 0.82);
-    this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(halfTan / Math.min(1, this.camera.aspect)));
+    const halfHeight = (1.2 / (this.options.fit ?? 0.82)) * (height / Math.max(1, Math.min(frame.width, frame.height)));
+    this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(halfHeight / reach));
     this.camera.updateProjectionMatrix();
     // A WebGL line is one pixel and Blender's tubes are thinner: each layer's light is scaled by how
     // many pixels its tube would cover, so a line carries as much light as in the render.
     const pixelsPerUnit = (height * this.renderer.getPixelRatio()) / (2 * distance * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2));
+    this.view.ppu = pixelsPerUnit / this.renderer.getPixelRatio();
+    this.view.width = width;
+    this.view.height = height;
     for (const layer of this.layers) {
       const tube = 2 * (layer.userData.thickness || 0.002) * pixelsPerUnit;
       layer.material.uniforms.uCoverage.value = Math.min(1, Math.max(0.25, tube));
@@ -300,7 +916,7 @@ export class Hologram {
   }
 
   wake() {
-    if (!this.frame && this.layers.length && this.visible()) {
+    if (!this.frame && this.ready && this.visible()) {
       this.last = performance.now();
       this.frame = window.requestAnimationFrame((now) => this.render(now));
     }
@@ -315,18 +931,31 @@ export class Hologram {
     const sample = config.voice === false ? { state: "idle", level: 0 } : (this.options.voice || defaultVoice)();
     const state = sample.state || "idle";
     const calm = document.documentElement.classList.contains("reduce-motion");
-    const ease = (current, goal, rate) => current + (goal - current) * Math.min(1, dt * rate);
     const smooth = this.smooth;
     // Speaking: the voice envelope. Listening: the microphone. Scaled down: the speech envelope
     // peaks every syllable, Blender's baked spectrum was smoother.
     const level = 0.55 * (sample.level || 0);
-    smooth.level = ease(smooth.level, level, level > smooth.level ? 22 : 7);
-    smooth.voice = ease(smooth.voice, state === "speaking" ? level : 0, 12);
-    smooth.intensity = ease(smooth.intensity, state === "muted" ? 0.45 : state === "armed" ? 1.15 : 1, 4);
-    smooth.spin = ease(smooth.spin, state === "thinking" ? 1.8 : 1, 3);
-    smooth.pulse = ease(smooth.pulse, state === "thinking" ? 2.2 : state === "armed" ? 1.15 : 1, 3);
+    smooth.level = ease(smooth.level, level, level > smooth.level ? 22 : 7, dt);
+    smooth.voice = ease(smooth.voice, state === "speaking" ? level : 0, 12, dt);
+    smooth.intensity = ease(smooth.intensity, state === "muted" ? 0.45 : state === "armed" ? 1.15 : 1, 4, dt);
+    smooth.spin = ease(smooth.spin, state === "thinking" ? 1.8 : 1, 3, dt);
+    smooth.pulse = ease(smooth.pulse, state === "thinking" ? 2.2 : state === "armed" ? 1.15 : 1, 3, dt);
     smooth.born = Math.min(1, smooth.born + dt * 1.6); // materializes when a model comes in
+    if (this.solid) this.animateSolid(dt, now, state, calm);
+    else this.animateLines(dt, now, calm);
+    const view = this.view;
+    if (!view.drag) {
+      view.yaw += view.velocity;
+      view.velocity *= 0.93;
+    }
+    this.turn.rotation.set(view.pitch, view.yaw, 0);
+    this.composer.render();
+    this.frame = window.requestAnimationFrame((time) => this.render(time));
+  }
 
+  animateLines(dt, now, calm) {
+    const config = this.config;
+    const smooth = this.smooth;
     const manifest = this.manifest;
     const fps = manifest.fps || 24;
     const loopSeconds = (manifest.shader?.loopFrames || 720) / fps;
@@ -359,14 +988,48 @@ export class Hologram {
       uniforms.uIntensity.value = intensity;
       uniforms.uLevel.value = smooth.level;
     }
-    const view = this.view;
-    if (!view.drag) {
-      view.yaw += view.velocity;
-      view.velocity *= 0.93;
+  }
+
+  animateSolid(dt, now, state, calm) {
+    const rig = this.rig;
+    const config = this.config;
+    const smooth = this.smooth;
+    for (const [object, base] of rig.base) {
+      object.position.copy(base.position);
+      object.quaternion.copy(base.quaternion);
+      object.scale.copy(base.scale);
+      object.visible = base.visible;
     }
-    this.turn.rotation.set(view.pitch, view.yaw, 0);
-    this.composer.render();
-    this.frame = window.requestAnimationFrame((time) => this.render(time));
+    rig.group.position.set(0, 0, 0);
+    rig.group.quaternion.identity();
+    const explode = config.explode / 100;
+    if (explode) for (const [object, direction] of rig.spread) object.position.addScaledVector(direction, explode);
+    // The pointer: where the mouse is over the canvas, back to the middle a few seconds after it stops.
+    const pointer = this.pointer;
+    pointer.active = now - pointer.at < 4000;
+    pointer.x = ease(pointer.x, pointer.active ? pointer.goalX : 0, 5, dt);
+    pointer.y = ease(pointer.y, pointer.active ? pointer.goalY : 0, 5, dt);
+    const moving = this.options.motion?.() || { x: 0, y: 0 };
+    this.motion.x = ease(this.motion.x, moving.x || 0, 10, dt);
+    this.motion.y = ease(this.motion.y, moving.y || 0, 10, dt);
+    const pace = (calm ? 0.3 : 1) * (0.3 + 0.7 * (config.spin / 50)) * smooth.spin;
+    rig.clock += dt * pace;
+    const roam = this.roaming && this.view.ppu
+      ? { x: Math.max(0, this.view.width / 2 / this.view.ppu - 0.95), z: Math.max(0, this.view.height / 2 / this.view.ppu - 0.85) } : null;
+    BEHAVIORS[this.manifest.behavior]?.(rig, {
+      t: rig.clock, dt, time: now / 1000, state, level: smooth.level, talk: smooth.voice, speaking: state === "speaking",
+      float: config.float / 50, secondary: config.orbit / 50, pulse: config.pulse / 50, pointer, motion: this.motion,
+      roam, camera: this.camera, config, calm,
+    });
+    for (const object of rig.nodes) {
+      if (config.parts[object.userData.role] === false) object.visible = false;
+    }
+    // The light of eyes and lenses: a slow breath, the voice, the state and "intensidade".
+    const breath = 1 + 0.14 * (config.pulse / 50) * Math.sin((now / 1000) * 1.7);
+    const thinking = state === "thinking" ? 1 + 0.3 * Math.sin((now / 1000) * 7) : 1;
+    const glow = breath * thinking * (1 + 1.4 * smooth.voice) * smooth.intensity * (config.opacity / 70) * (0.2 + 0.8 * smooth.born);
+    for (const material of rig.glows) material.emissiveIntensity = material.userData.glow * glow;
+    rig.group.scale.setScalar((config.scale / 100) * (0.92 + 0.08 * smooth.born));
   }
 
   resetView() {
