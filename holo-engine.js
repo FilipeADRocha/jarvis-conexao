@@ -4,10 +4,10 @@
      tools/avatar_builder.py for Ultron and Sexta-feira). Each layer keeps its spin and sway, and the shader
      is the "JARVIS Holograma" material: light pulses running along every trace, shimmer, per-layer glow,
      AgX color and the compositor's bloom;
-   - "solid": a shaded character (tools/character_builder.py: HAL 9000, KinitoPET, Verity, AUTO and the
-     Matrix sentinel; tools/glados_builder.py: GLaDOS, the user's own model with its textures), a tree of
-     named parts that BEHAVIORS below bring to life: blinking eyes, gills, the helm, tentacles, a head that
-     turns to the user, a face drawn live on a canvas.
+   - "solid": a shaded character (tools/character_builder.py: HAL 9000, KinitoPET, Verity and AUTO;
+     tools/glados_builder.py and tools/sentinel_builder.py: GLaDOS and the Matrix sentinel, the user's own
+     models with their textures), a tree of named parts that BEHAVIORS below bring to life: blinking eyes,
+     gills, the helm, waving tentacles, a body that turns after the mouse, a face drawn live on a canvas.
    The voice and the microphone drive both; the "faça você mesmo" settings scale, recolor, explode and
    pace them. The canvas is transparent: the page shows around the model and through its gaps. */
 import * as THREE from "three";
@@ -120,6 +120,18 @@ const OUTPUT = `
     float edge = smoothstep( 0.0, 0.14, min( min( vUv.x, 1.0 - vUv.x ), min( vUv.y, 1.0 - vUv.y ) ) );
     shown *= mix( edge, 1.0, cover );
     gl_FragColor = vec4( shown, max( cover, max( shown.r, max( shown.g, shown.b ) ) ) );
+  }`;
+
+// The tentacles' wave (the Matrix sentinel): each vertex sways by how free it is (wave.x: 0 at the body, 1 at
+// the tips) with its own phase (wave.y), and the wave runs from the body out to the tips. Blender plays the
+// same motion with a geometry-nodes modifier (tools/sentinel_builder.py).
+const WAVE = `{
+    float flex = wave.x * wave.x;
+    float t = uWaveTime;
+    vec3 sway = vec3(sin(t * 1.7 + wave.y - wave.x * 5.0),
+                     sin(t * 1.3 + wave.y * 1.6 - wave.x * 4.2 + 1.3),
+                     cos(t * 1.5 + wave.y * 0.7 - wave.x * 4.6));
+    transformed += sway * uWaveAmp * flex;
   }`;
 
 const cache = new Map(); // model id -> Promise<{manifest, buffer, images}>
@@ -515,38 +527,50 @@ const BEHAVIORS = {
   matrix(rig, ctx) {
     const s = rig.state;
     const body = rig.node("corpo");
-    // Every tentacle bends a little at each link, more toward the tip; the wave runs down to it.
-    const pace = ctx.secondary * (1 + 1.4 * (s.speed ?? 0)) * (ctx.state === "thinking" ? 1.8 : 1);
-    s.wave = (s.wave ?? 0) + ctx.dt * 1.5 * pace;
-    rig.chains.forEach((links, k) => {
-      const n = links.length;
-      links.forEach((link, i) => {
-        const tip = 0.35 + (i + 1) / n;
-        const phase = s.wave - i * 0.5 + k * 1.7;
-        link.rotateX(0.085 * Math.sin(phase) * tip);
-        link.rotateZ(0.07 * Math.sin(phase * 0.83 + k) * tip);
-      });
-    });
-    rig.each("arm", (arm, i) => arm.rotateX(0.25 * Math.sin(ctx.t * 2.4 + i * 1.3) * Math.sin(ctx.t * 0.7 + i)));
-    body.position.z += 0.06 * ctx.float * Math.sin(ctx.t * 1.05);
-    body.rotateY(0.05 * Math.sin(ctx.t * 0.7));
-    // In the dialogue it hunts around the screen: a smooth wandering path inside the stage.
-    if (ctx.roam) {
-      s.roamT = (s.roamT ?? Math.random() * 100) + ctx.dt * (ctx.calm ? 0.25 : 1);
-      const t = s.roamT;
-      const x = ctx.roam.x * Math.sin(t * 0.21 + 0.8 * Math.sin(t * 0.053));
-      const z = ctx.roam.z * Math.sin(t * 0.33 + 1.3) * Math.cos(t * 0.071);
-      const vx = s.lastX === undefined ? 0 : (x - s.lastX) / Math.max(ctx.dt, 1e-3);
-      s.lastX = x;
-      s.speed = ease(s.speed ?? 0, clamp(Math.abs(vx) / 0.6, 0, 1), 3, ctx.dt);
-      s.heading = ease(s.heading ?? 0, clamp(vx * 0.9, -0.75, 0.75), 2.5, ctx.dt);
-      rig.group.position.x += x;
-      rig.group.position.z += z;
-      body.rotateZ(s.heading);
-      body.rotateY(-s.heading * 0.25);
-    } else {
-      body.rotateZ(0.14 * Math.sin(ctx.t * 0.35));
+    // Its tentacles never stop waving (the material's wave); thinking, they go faster. It hovers, breathing.
+    rig.waveSpeed = ctx.state === "thinking" ? 1.7 : 1;
+    rig.waveAmp = 1;
+    body.position.z += 0.03 * ctx.float * Math.sin(ctx.t * 1.05);
+    body.rotateY(0.04 * Math.sin(ctx.t * 0.7));
+    if (!ctx.roam) {
+      body.rotateZ(0.12 * Math.sin(ctx.t * 0.35));
+      return;
     }
+    // In the dialogue it hunts around the screen like a spider: a dash to a spot, a stop facing the user, the
+    // next dash. Running, it turns toward where it goes, bobs at every step and its tentacles row harder.
+    const box = ctx.roam;
+    s.pos ??= { x: 0, z: 0 };
+    s.vel ??= { x: 0, z: 0 };
+    s.goal ??= { x: 0, z: 0 };
+    s.restUntil ??= ctx.time + 1.2;
+    const dx = s.goal.x - s.pos.x;
+    const dz = s.goal.z - s.pos.z;
+    const far = Math.hypot(dx, dz);
+    if (far < 0.06) {
+      if (s.restUntil === Infinity) s.restUntil = ctx.time + 0.6 + Math.random() * 1.8; // arrived: a stop
+      if (ctx.time > s.restUntil) { // the next spot, somewhere else on the stage
+        s.goal = { x: (Math.random() * 2 - 1) * box.x, z: (Math.random() * 2 - 1) * box.z };
+        if (Math.hypot(s.goal.x - s.pos.x, s.goal.z - s.pos.z) < 0.4) s.goal.x = -s.goal.x;
+        s.restUntil = Infinity;
+      }
+    }
+    const top = 1.7 * (ctx.calm ? 0.3 : 1);
+    const pull = far > 1e-4 ? Math.min(top, far * 3.2) / far : 0;
+    s.vel.x = ease(s.vel.x, dx * pull, 4.5, ctx.dt);
+    s.vel.z = ease(s.vel.z, dz * pull, 4.5, ctx.dt);
+    s.pos.x += s.vel.x * ctx.dt;
+    s.pos.z += s.vel.z * ctx.dt;
+    const speed = Math.hypot(s.vel.x, s.vel.z);
+    s.speed = ease(s.speed ?? 0, clamp(speed / top, 0, 1), 6, ctx.dt);
+    rig.group.position.x += s.pos.x;
+    rig.group.position.z += s.pos.z;
+    const heading = speed > 0.1 ? Math.atan2(s.vel.x, Math.abs(s.vel.z) * 0.6 + 0.25) : 0; // stopped: face the user
+    s.heading = ease(s.heading ?? 0, heading, 4, ctx.dt);
+    body.rotateZ(s.heading);
+    body.rotateX(clamp(-s.vel.z * 0.3, -0.35, 0.35)); // nose up climbing, down dropping
+    body.position.z += 0.03 * s.speed * Math.abs(Math.sin(ctx.time * 11)); // the steps
+    rig.waveSpeed *= 1 + 2.2 * s.speed;
+    rig.waveAmp = 1 + 0.7 * s.speed;
   },
 };
 
@@ -767,18 +791,31 @@ export class Hologram {
     const material = spec.coat ? new THREE.MeshPhysicalMaterial({ ...options, clearcoat: spec.coat, clearcoatRoughness: 0.06 })
       : new THREE.MeshStandardMaterial(options);
     material.name = spec.name;
+    material.userData = { spec, glow: spec.glow || 0, tint: spec.tint || "" };
+    const patches = [];
     if (spec.glow) {
       material.emissive.setRGB(...spec.emissive);
       material.emissiveIntensity = spec.glow;
       if (spec.colors) { // the vertex colors paint the light too (HAL's eye: white core, red, dark rim)
-        material.onBeforeCompile = (shader) => {
+        patches.push((shader) => {
           shader.fragmentShader = shader.fragmentShader.replace("vec3 totalEmissiveRadiance = emissive;",
             "vec3 totalEmissiveRadiance = emissive * vColor.rgb;");
-        };
-        material.customProgramCacheKey = () => "glow-colors";
+        });
       }
     }
-    material.userData = { spec, glow: spec.glow || 0, tint: spec.tint || "" };
+    if (spec.wave) { // waving tentacles: the geometry carries a "wave" attribute
+      const wave = { uWaveTime: { value: 0 }, uWaveAmp: { value: spec.wave.amp ?? 0.05 } };
+      material.userData.wave = wave;
+      patches.push((shader) => {
+        Object.assign(shader.uniforms, wave);
+        shader.vertexShader = `attribute vec2 wave;\nuniform float uWaveTime;\nuniform float uWaveAmp;\n${shader.vertexShader}`
+          .replace("#include <begin_vertex>", `#include <begin_vertex>\n${WAVE}`);
+      });
+    }
+    if (patches.length) {
+      material.onBeforeCompile = (shader) => patches.forEach((patch) => patch(shader));
+      material.customProgramCacheKey = () => `${spec.colors && spec.glow ? "glow-colors" : ""}|${spec.wave ? "wave" : ""}`;
+    }
     // Textures from Blender (GLaDOS): the color, the relief, roughness (G) and metal (B), what glows.
     const maps = spec.maps || {};
     const texture = (index, srgb) => {
@@ -820,6 +857,7 @@ export class Hologram {
       geometry.setAttribute("normal", new THREE.BufferAttribute(view(spec.normal, Int8Array), 3, true));
       if (spec.uv) geometry.setAttribute("uv", new THREE.BufferAttribute(view(spec.uv, Float32Array), 2));
       if (spec.color) geometry.setAttribute("color", new THREE.BufferAttribute(view(spec.color, Float32Array), 3));
+      if (spec.wave) geometry.setAttribute("wave", new THREE.BufferAttribute(view(spec.wave, Float32Array), 2));
       geometry.setIndex(new THREE.BufferAttribute(view(spec.index, spec.index.type === "uint32" ? Uint32Array : Uint16Array), 1));
       for (const group of spec.groups) geometry.addGroup(group.start, group.count, group.material);
       return geometry;
@@ -833,6 +871,7 @@ export class Hologram {
       object.scale.fromArray(spec.scale);
       object.visible = !spec.hidden;
       object.userData = { role: spec.role || "shell", tags: spec.tags || {} };
+      if (object.isMesh && object.geometry.attributes.wave) object.frustumCulled = false; // it reaches past its rest bounds
       return object;
     });
     manifest.nodes.forEach((spec, index) => (spec.parent >= 0 ? nodes[spec.parent] : group).add(nodes[index]));
@@ -860,6 +899,7 @@ export class Hologram {
       base: new Map(nodes.map((object) => [object, { position: object.position.clone(), quaternion: object.quaternion.clone(),
         scale: object.scale.clone(), visible: object.visible }])),
       glows: materials.filter((material) => material.userData.glow > 0),
+      waves: materials.filter((material) => material.userData.wave),
       face: materials.find((material) => material.userData.face)?.userData.face || null,
       node: (name) => byName.get(name) || spare,
       material: (name) => materials.find((material) => material.name === name),
@@ -1055,6 +1095,11 @@ export class Hologram {
     const thinking = state === "thinking" ? 1 + 0.3 * Math.sin((now / 1000) * 7) : 1;
     const glow = breath * thinking * (1 + 1.4 * smooth.voice) * smooth.intensity * (config.opacity / 70) * (0.2 + 0.8 * smooth.born);
     for (const material of rig.glows) material.emissiveIntensity = material.userData.glow * glow;
+    for (const material of rig.waves) { // the tentacles: their pace and reach (the behavior may raise both)
+      const { spec, wave } = material.userData;
+      wave.uWaveTime.value += dt * (spec.wave.speed ?? 1.6) * (rig.waveSpeed ?? 1) * (config.orbit / 50) * (calm ? 0.3 : 1);
+      wave.uWaveAmp.value = (spec.wave.amp ?? 0.05) * (rig.waveAmp ?? 1) * (0.3 + 0.7 * smooth.born);
+    }
     rig.group.scale.setScalar((config.scale / 100) * (0.92 + 0.08 * smooth.born));
   }
 
