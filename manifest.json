@@ -1,0 +1,15 @@
+{
+  "name": "Conexão JARVIS",
+  "short_name": "JARVIS",
+  "description": "Seu assistente Jarvis no celular, conectado ao PC servidor.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#02070d",
+  "theme_color": "#02070d",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

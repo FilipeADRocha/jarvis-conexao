@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#02070d">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Conexão JARVIS">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="referrer" content="no-referrer">
+  <title>Conexão JARVIS</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="mobile.css">
+</head>
+<body data-screen="entry">
+  <canvas id="bg" aria-hidden="true"></canvas>
+
+  <!-- Entry: the high-tech gate of the app -->
+  <section class="screen entry" id="entry">
+    <div class="entry-grid" aria-hidden="true"></div>
+    <div class="entry-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <header class="entry-head">
+      <span data-i18n="secure">LINK NEURAL SEGURO</span>
+      <span id="entry-clock">--:--:--</span>
+    </header>
+    <div class="entry-reactor" aria-hidden="true">
+      <i class="r1"></i><i class="r2"></i><i class="r3"></i><i class="r4"></i>
+      <svg viewBox="-50 -50 100 100"><polygon points="0,-17 15,9 -15,9"></polygon></svg>
+      <b></b>
+    </div>
+    <h1 class="entry-title"><small data-i18n="conn">CONEXÃO</small><strong data-text="JARVIS">JARVIS</strong></h1>
+    <p class="entry-sub" id="entry-sub" data-i18n="tagline">SEU ASSISTENTE, ONDE VOCÊ ESTIVER</p>
+    <ol class="entry-log" id="entry-log" aria-live="polite"></ol>
+    <div class="entry-actions" id="entry-actions">
+      <button type="button" class="cta" id="scan"><i></i><span data-i18n="scan">ESCANEAR QR CODE</span></button>
+      <button type="button" class="ghost" id="show-code" data-i18n="typeCode">DIGITAR CÓDIGO (MESMO WI-FI)</button>
+      <form class="code-form" id="pair-form" autocomplete="off" hidden>
+        <input id="pair-code" inputmode="numeric" maxlength="7" placeholder="000 000" aria-label="Código">
+        <button type="submit" data-i18n="pair">PAREAR</button>
+      </form>
+      <p class="entry-hint" id="entry-hint" data-i18n="hint">No PC, abra a aba CELULAR e aponte a câmera para o QR code.</p>
+    </div>
+    <div class="scanner" id="scanner" hidden>
+      <video id="scanner-video" playsinline muted></video>
+      <i class="scanner-frame"></i><i class="scanner-line"></i>
+      <button type="button" class="ghost" id="scanner-close" data-i18n="cancel">CANCELAR</button>
+    </div>
+  </section>
+
+  <!-- App -->
+  <section class="screen app" id="app" hidden>
+    <header class="top">
+      <div class="brand"><i class="dot" id="dot"></i><strong data-brand>JARVIS</strong><small id="host">--</small></div>
+      <span class="state" id="state">--</span>
+    </header>
+    <div class="lost" id="lost" hidden><b></b><span data-i18n="lost">PROCURANDO O JARVIS… O PC ESTÁ LIGADO?</span></div>
+
+    <main class="panes">
+      <section class="pane is-active" id="pane-talk">
+        <div class="orb" id="orb" aria-hidden="true"><i></i><i></i><i></i><b></b><div class="orb-bars" id="orb-bars"></div></div>
+        <ol class="log" id="log" aria-live="polite"></ol>
+      </section>
+
+      <section class="pane" id="pane-control">
+        <h2 data-i18n="telemetry">// TELEMETRIA DO PC</h2>
+        <div class="gauges" id="gauges"></div>
+        <h2 data-i18n="modules">// MÓDULO NA TELA DO PC</h2>
+        <div class="modules" id="modules"></div>
+        <h2 data-i18n="media">// MÍDIA E SISTEMA</h2>
+        <div class="controls">
+          <button type="button" data-control="anterior">⏮<span data-i18n="prev">ANTERIOR</span></button>
+          <button type="button" data-control="tocar_pausar">⏯<span data-i18n="play">PLAY/PAUSA</span></button>
+          <button type="button" data-control="proxima">⏭<span data-i18n="next">PRÓXIMA</span></button>
+          <button type="button" data-control="volume_menos">−<span data-i18n="volume">VOLUME</span></button>
+          <button type="button" data-control="mudo">🔇<span data-i18n="mute">MUDO</span></button>
+          <button type="button" data-control="volume_mais">+<span data-i18n="volume">VOLUME</span></button>
+          <button type="button" data-control="area_de_trabalho">▭<span data-i18n="desktop">ÁREA DE TRAB.</span></button>
+          <button type="button" data-control="bloquear" class="is-danger">🔒<span data-i18n="lock">BLOQUEAR PC</span></button>
+        </div>
+      </section>
+
+      <section class="pane" id="pane-screen">
+        <div class="screen-tools">
+          <button type="button" id="shot" data-i18n="refresh">ATUALIZAR</button>
+          <label class="switch"><input type="checkbox" id="shot-live"><i></i><span data-i18n="live">AO VIVO</span></label>
+        </div>
+        <figure class="shot" id="shot-box"><p data-i18n="shotHint">Toque em ATUALIZAR para ver a tela do PC.</p></figure>
+        <h2 data-i18n="sendTitle">// ENVIAR PARA O PC</h2>
+        <label class="drop">
+          <input type="file" id="files" multiple>
+          <b>⇡</b><span data-i18n="pick">Toque para escolher fotos ou arquivos</span><em data-i18n="pickNote">Vão para a pasta de anotações do PC</em>
+        </label>
+        <ul class="uploads" id="uploads"></ul>
+        <h2 data-i18n="openTitle">// ABRIR NO PC</h2>
+        <form class="open" id="open-form">
+          <input id="open-url" placeholder="youtube, g1.globo.com…" autocomplete="off" aria-label="Site">
+          <button type="submit" data-i18n="open">ABRIR</button>
+        </form>
+      </section>
+
+      <section class="pane" id="pane-settings">
+        <h2 data-i18n="language">// LINGUAGEM</h2>
+        <div class="langs" id="langs">
+          <button type="button" data-lang="pt-BR"><b>PT</b>Português</button>
+          <button type="button" data-lang="en-US"><b>EN</b>English</button>
+          <button type="button" data-lang="es-ES"><b>ES</b>Español</button>
+        </div>
+        <label class="switch row"><input type="checkbox" id="lang-pc" checked><i></i><span data-i18n="langPc">MUDAR TAMBÉM O IDIOMA DO JARVIS NO PC</span></label>
+        <h2 data-i18n="voice">// VOZ</h2>
+        <label class="switch row"><input type="checkbox" id="speak-toggle"><i></i><span data-i18n="speakHere">FALAR AS RESPOSTAS NESTE CELULAR</span></label>
+        <h2 data-i18n="connection">// CONEXÃO</h2>
+        <dl class="conn" id="conn"></dl>
+        <button type="button" class="danger" id="disconnect" data-i18n="disconnect">DESCONECTAR DESTE JARVIS</button>
+        <p class="note" data-i18n="disconnectNote">O celular deixa de ter acesso. Para voltar, escaneie o QR code de novo.</p>
+      </section>
+    </main>
+
+    <form class="ask" id="ask-form" autocomplete="off">
+      <button type="button" class="mic" id="mic" aria-label="Falar">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"></path></svg>
+      </button>
+      <input id="ask" maxlength="500" placeholder="Fale ou digite um pedido…" aria-label="Pedido">
+      <button type="submit" class="send" aria-label="Enviar">➤</button>
+    </form>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="is-active" data-pane="talk">◎<span data-i18n="tTalk">CONVERSA</span></button>
+      <button type="button" data-pane="control">⌘<span data-i18n="tControl">CONTROLE</span></button>
+      <button type="button" data-pane="screen">▣<span data-i18n="tScreen">TELA</span></button>
+      <button type="button" data-pane="settings">⚙<span data-i18n="tSettings">AJUSTES</span></button>
+    </nav>
+  </section>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="mobile.js"></script>
+</body>
+</html>
