@@ -45,6 +45,7 @@
     </div>
     <div class="scanner" id="scanner" hidden>
       <video id="scanner-video" playsinline muted></video>
+      <canvas id="scanner-canvas" hidden></canvas>
       <i class="scanner-frame"></i><i class="scanner-line"></i>
       <button type="button" class="ghost" id="scanner-close" data-i18n="cancel">CANCELAR</button>
     </div>
@@ -60,15 +61,31 @@
 
     <main class="panes">
       <section class="pane is-active" id="pane-talk">
-        <div class="orb" id="orb" aria-hidden="true"><i></i><i></i><i></i><b></b><div class="orb-bars" id="orb-bars"></div></div>
+        <div class="holo" id="holo" aria-hidden="true">
+          <div class="holo-fallback"><i></i><i></i><i></i><b></b></div>
+          <span class="holo-model" id="holo-model"></span>
+        </div>
         <ol class="log" id="log" aria-live="polite"></ol>
+      </section>
+
+      <section class="pane" id="pane-panel">
+        <div class="panel-home" id="panel-home">
+          <svg class="ring" id="ring" viewBox="-200 -200 400 400" aria-label="Módulos do Jarvis"></svg>
+          <p class="ring-hint" data-i18n="ringHint">Toque num módulo para abrir aqui, adaptado ao celular.</p>
+        </div>
+        <div class="module" id="module" hidden>
+          <header class="module-head">
+            <button type="button" class="back" id="module-back" aria-label="Voltar">‹</button>
+            <h2 id="module-title">--</h2>
+            <button type="button" class="on-pc" id="module-pc" data-i18n="onPc">NO PC</button>
+          </header>
+          <div class="module-body" id="module-body"></div>
+        </div>
       </section>
 
       <section class="pane" id="pane-control">
         <h2 data-i18n="telemetry">// TELEMETRIA DO PC</h2>
         <div class="gauges" id="gauges"></div>
-        <h2 data-i18n="modules">// MÓDULO NA TELA DO PC</h2>
-        <div class="modules" id="modules"></div>
         <h2 data-i18n="media">// MÍDIA E SISTEMA</h2>
         <div class="controls">
           <button type="button" data-control="anterior">⏮<span data-i18n="prev">ANTERIOR</span></button>
@@ -80,10 +97,8 @@
           <button type="button" data-control="area_de_trabalho">▭<span data-i18n="desktop">ÁREA DE TRAB.</span></button>
           <button type="button" data-control="bloquear" class="is-danger">🔒<span data-i18n="lock">BLOQUEAR PC</span></button>
         </div>
-      </section>
-
-      <section class="pane" id="pane-screen">
         <div class="screen-tools">
+          <h2 data-i18n="screenTitle">// TELA DO PC</h2>
           <button type="button" id="shot" data-i18n="refresh">ATUALIZAR</button>
           <label class="switch"><input type="checkbox" id="shot-live"><i></i><span data-i18n="live">AO VIVO</span></label>
         </div>
@@ -102,6 +117,9 @@
       </section>
 
       <section class="pane" id="pane-settings">
+        <h2 data-i18n="voice">// VOZ</h2>
+        <label class="switch row"><input type="checkbox" id="speak-toggle"><i></i><span data-i18n="speakHere">FALAR AS RESPOSTAS NESTE CELULAR (VOZ DO JARVIS)</span></label>
+        <label class="switch row"><input type="checkbox" id="quiet-toggle"><i></i><span data-i18n="quietPc">SILENCIAR O PC QUANDO EU FALAR PELO CELULAR</span></label>
         <h2 data-i18n="language">// LINGUAGEM</h2>
         <div class="langs" id="langs">
           <button type="button" data-lang="pt-BR"><b>PT</b>Português</button>
@@ -109,8 +127,6 @@
           <button type="button" data-lang="es-ES"><b>ES</b>Español</button>
         </div>
         <label class="switch row"><input type="checkbox" id="lang-pc" checked><i></i><span data-i18n="langPc">MUDAR TAMBÉM O IDIOMA DO JARVIS NO PC</span></label>
-        <h2 data-i18n="voice">// VOZ</h2>
-        <label class="switch row"><input type="checkbox" id="speak-toggle"><i></i><span data-i18n="speakHere">FALAR AS RESPOSTAS NESTE CELULAR</span></label>
         <h2 data-i18n="connection">// CONEXÃO</h2>
         <dl class="conn" id="conn"></dl>
         <button type="button" class="danger" id="disconnect" data-i18n="disconnect">DESCONECTAR DESTE JARVIS</button>
@@ -121,6 +137,7 @@
     <form class="ask" id="ask-form" autocomplete="off">
       <button type="button" class="mic" id="mic" aria-label="Falar">
         <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"></path></svg>
+        <i class="mic-ring" aria-hidden="true"></i>
       </button>
       <input id="ask" maxlength="500" placeholder="Fale ou digite um pedido…" aria-label="Pedido">
       <button type="submit" class="send" aria-label="Enviar">➤</button>
@@ -128,13 +145,15 @@
 
     <nav class="tabs" role="tablist">
       <button type="button" class="is-active" data-pane="talk">◎<span data-i18n="tTalk">CONVERSA</span></button>
+      <button type="button" data-pane="panel">◈<span data-i18n="tPanel">PAINEL</span></button>
       <button type="button" data-pane="control">⌘<span data-i18n="tControl">CONTROLE</span></button>
-      <button type="button" data-pane="screen">▣<span data-i18n="tScreen">TELA</span></button>
       <button type="button" data-pane="settings">⚙<span data-i18n="tSettings">AJUSTES</span></button>
     </nav>
   </section>
 
   <div class="toast" id="toast" role="status"></div>
   <script src="mobile.js"></script>
+  <script src="panel.js"></script>
+  <script src="holo-loader.js"></script>
 </body>
 </html>

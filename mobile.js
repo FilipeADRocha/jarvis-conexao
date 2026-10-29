@@ -1,13 +1,14 @@
 /* Conexão JARVIS: the phone app of the assistant whose PC is the server.
 
-   Two ways in, one app:
-   - installed from GitHub Pages: the QR code on the PC (aba CELULAR, acesso remoto ligado) opens
-     this page with #c=<topic, one-time secret>. The PC's current HTTPS address (a Cloudflare quick
-     tunnel) is read from that private ntfy topic, the secret becomes this device's token, and
-     from then on the app always finds that PC again, from any network, until DESCONECTAR.
-   - served by the PC itself on the same Wi-Fi (http://<pc>:8770): same app, same-origin calls,
-     pairing by the QR code or the 6-digit code.
-   The PC must be on with Jarvis open; while it is not, the app keeps looking for it. */
+   One app, three ways in:
+   - the Android app (Capacitor) and the page installed from GitHub Pages: the QR code on the PC (aba
+     CELULAR) carries a private ntfy topic and a one-time secret. The PC's current HTTPS address (a
+     Cloudflare quick tunnel) is read from the topic, the secret becomes this device's token, and from then
+     on the app finds that PC again from any network until DESCONECTAR. At home the Android app talks to
+     the PC straight over the Wi-Fi.
+   - the page the PC itself serves on the Wi-Fi (http://<pc>:8770): same-origin calls, the 6-digit code.
+   The replies can be spoken here in the PC's own voice (/m/speech), the microphone records for the PC's
+   Whisper (/m/listen), and the PAINEL (panel.js) opens the desktop modules adapted to the phone. */
 (() => {
   "use strict";
 
@@ -15,19 +16,13 @@
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const STORE = "jarvis.conexao";
   const NTFY = "https://ntfy.sh";
-  const REMOTE_APP = location.hostname.endsWith("github.io"); // installed app, not the PC's own page
+  const NATIVE = Boolean(window.Capacitor?.isNativePlatform?.()) || location.protocol === "capacitor:";
+  const REMOTE_APP = NATIVE || location.hostname.endsWith("github.io"); // not the PC's own page
   const STATES = {
     "pt-BR": { idle: "PRONTO", armed: "OUVINDO", thinking: "PENSANDO", speaking: "FALANDO", muted: "MUDO", loading: "INICIANDO", off: "SÓ TEXTO" },
     "en-US": { idle: "READY", armed: "LISTENING", thinking: "THINKING", speaking: "SPEAKING", muted: "MUTED", loading: "STARTING", off: "TEXT ONLY" },
     "es-ES": { idle: "LISTO", armed: "ESCUCHANDO", thinking: "PENSANDO", speaking: "HABLANDO", muted: "SILENCIO", loading: "INICIANDO", off: "SOLO TEXTO" },
   };
-  const MODULES = [
-    ["home", ["INÍCIO", "HOME", "INICIO"]], ["dialogue", ["DIÁLOGO", "DIALOGUE", "DIÁLOGO"]], ["map", ["MAPA GLOBAL", "WORLD MAP", "MAPA GLOBAL"]],
-    ["news", ["NOTÍCIAS", "NEWS", "NOTICIAS"]], ["finance", ["MERCADO DE INVESTIMENTO", "INVESTMENT MARKET", "MERCADO DE INVERSIÓN"]],
-    ["explorer", ["EXPLORER", "EXPLORER", "EXPLORADOR"]], ["apps", ["APLICATIVOS", "APPS", "APLICACIONES"]], ["technical", ["TÉCNICO", "TECHNICAL", "TÉCNICO"]],
-    ["system", ["SISTEMA", "SYSTEM", "SISTEMA"]], ["files", ["ARQUIVOS", "FILES", "ARCHIVOS"]], ["notes", ["ANOTAÇÕES", "NOTES", "NOTAS"]],
-    ["security", ["SEGURANÇA", "SECURITY", "SEGURIDAD"]], ["tutorial", ["TUTORIAL", "TUTORIAL", "TUTORIAL"]], ["custom", ["CUSTOMIZAÇÃO", "CUSTOMIZE", "PERSONALIZAR"]],
-  ];
   const LANGS = ["pt-BR", "en-US", "es-ES"];
   const TEXT = {
     secure: ["LINK NEURAL SEGURO", "SECURE NEURAL LINK", "ENLACE NEURAL SEGURO"], conn: ["CONEXÃO", "CONNECTION", "CONEXIÓN"],
@@ -37,43 +32,55 @@
     hint: ["No PC, abra a aba CELULAR e aponte a câmera para o QR code.", "On the PC, open the PHONE tab and point the camera at the QR code.",
       "En el PC, abra la pestaña MÓVIL y apunte la cámara al código QR."],
     lost: ["PROCURANDO O JARVIS… O PC ESTÁ LIGADO?", "LOOKING FOR JARVIS… IS THE PC ON?", "BUSCANDO A JARVIS… ¿EL PC ESTÁ ENCENDIDO?"],
-    telemetry: ["// TELEMETRIA DO PC", "// PC TELEMETRY", "// TELEMETRÍA DEL PC"], modules: ["// MÓDULO NA TELA DO PC", "// MODULE ON THE PC SCREEN", "// MÓDULO EN LA PANTALLA DEL PC"],
-    media: ["// MÍDIA E SISTEMA", "// MEDIA AND SYSTEM", "// MEDIOS Y SISTEMA"], prev: ["ANTERIOR", "PREVIOUS", "ANTERIOR"], play: ["PLAY/PAUSA", "PLAY/PAUSE", "PLAY/PAUSA"],
-    next: ["PRÓXIMA", "NEXT", "SIGUIENTE"], volume: ["VOLUME", "VOLUME", "VOLUMEN"], mute: ["MUDO", "MUTE", "SILENCIO"], desktop: ["ÁREA DE TRAB.", "DESKTOP", "ESCRITORIO"],
+    telemetry: ["// TELEMETRIA DO PC", "// PC TELEMETRY", "// TELEMETRÍA DEL PC"], media: ["// MÍDIA E SISTEMA", "// MEDIA AND SYSTEM", "// MEDIOS Y SISTEMA"],
+    prev: ["ANTERIOR", "PREVIOUS", "ANTERIOR"], play: ["PLAY/PAUSA", "PLAY/PAUSE", "PLAY/PAUSA"], next: ["PRÓXIMA", "NEXT", "SIGUIENTE"],
+    volume: ["VOLUME", "VOLUME", "VOLUMEN"], mute: ["MUDO", "MUTE", "SILENCIO"], desktop: ["ÁREA DE TRAB.", "DESKTOP", "ESCRITORIO"],
     lock: ["BLOQUEAR PC", "LOCK PC", "BLOQUEAR PC"], refresh: ["ATUALIZAR", "REFRESH", "ACTUALIZAR"], live: ["AO VIVO", "LIVE", "EN VIVO"],
+    screenTitle: ["// TELA DO PC", "// PC SCREEN", "// PANTALLA DEL PC"],
     shotHint: ["Toque em ATUALIZAR para ver a tela do PC.", "Tap REFRESH to see the PC screen.", "Toque ACTUALIZAR para ver la pantalla del PC."],
     sendTitle: ["// ENVIAR PARA O PC", "// SEND TO THE PC", "// ENVIAR AL PC"], pick: ["Toque para escolher fotos ou arquivos", "Tap to pick photos or files", "Toque para elegir fotos o archivos"],
     pickNote: ["Vão para a pasta de anotações do PC", "They go to the PC's notes folder", "Van a la carpeta de notas del PC"], openTitle: ["// ABRIR NO PC", "// OPEN ON THE PC", "// ABRIR EN EL PC"],
     open: ["ABRIR", "OPEN", "ABRIR"], language: ["// LINGUAGEM", "// LANGUAGE", "// IDIOMA"],
     langPc: ["MUDAR TAMBÉM O IDIOMA DO JARVIS NO PC", "ALSO CHANGE JARVIS'S LANGUAGE ON THE PC", "CAMBIAR TAMBIÉN EL IDIOMA DE JARVIS EN EL PC"],
-    voice: ["// VOZ", "// VOICE", "// VOZ"], speakHere: ["FALAR AS RESPOSTAS NESTE CELULAR", "SPEAK THE REPLIES ON THIS PHONE", "HABLAR LAS RESPUESTAS EN ESTE MÓVIL"],
+    voice: ["// VOZ", "// VOICE", "// VOZ"], speakHere: ["FALAR AS RESPOSTAS NESTE CELULAR (VOZ DO JARVIS)", "SPEAK THE REPLIES ON THIS PHONE (JARVIS'S VOICE)",
+      "HABLAR LAS RESPUESTAS EN ESTE MÓVIL (VOZ DE JARVIS)"],
+    quietPc: ["SILENCIAR O PC QUANDO EU FALAR PELO CELULAR", "KEEP THE PC SILENT WHEN I TALK FROM THE PHONE", "SILENCIAR EL PC CUANDO HABLE DESDE EL MÓVIL"],
     connection: ["// CONEXÃO", "// CONNECTION", "// CONEXIÓN"], disconnect: ["DESCONECTAR DESTE JARVIS", "DISCONNECT FROM THIS JARVIS", "DESCONECTAR DE ESTE JARVIS"],
     disconnectNote: ["O celular deixa de ter acesso. Para voltar, escaneie o QR code de novo.", "This phone loses access. To come back, scan the QR code again.",
       "Este móvil pierde el acceso. Para volver, escanee el código QR de nuevo."],
-    tTalk: ["CONVERSA", "TALK", "CHARLA"], tControl: ["CONTROLE", "CONTROL", "CONTROL"], tScreen: ["TELA", "SCREEN", "PANTALLA"], tSettings: ["AJUSTES", "SETTINGS", "AJUSTES"],
+    tTalk: ["CONVERSA", "TALK", "CHARLA"], tPanel: ["PAINEL", "PANEL", "PANEL"], tControl: ["CONTROLE", "CONTROL", "CONTROL"], tSettings: ["AJUSTES", "SETTINGS", "AJUSTES"],
+    ringHint: ["Toque num módulo para abrir aqui, adaptado ao celular.", "Tap a module to open it here, made for the phone.", "Toque un módulo para abrirlo aquí, adaptado al móvil."],
+    onPc: ["NO PC", "ON PC", "EN EL PC"],
     ask: ["Fale ou digite um pedido…", "Speak or type a request…", "Hable o escriba un pedido…"], you: ["VOCÊ", "YOU", "TÚ"], action: ["AÇÃO", "ACTION", "ACCIÓN"],
     bootScan: ["Iniciando o núcleo do app", "Starting the app core", "Iniciando el núcleo de la app"],
     bootLocate: ["Localizando o servidor", "Locating the server", "Localizando el servidor"],
     bootTunnel: ["Abrindo canal criptografado", "Opening encrypted channel", "Abriendo canal cifrado"],
     bootAuth: ["Autenticando este dispositivo", "Authenticating this device", "Autenticando este dispositivo"],
     bootOk: ["Link estabelecido", "Link established", "Enlace establecido"], bootWait: ["Aguardando pareamento", "Waiting for pairing", "Esperando emparejamiento"],
-    connected: ["Conectado ao", "Connected to", "Conectado a"], server: ["SERVIDOR", "SERVER", "SERVIDOR"], route: ["ROTA", "ROUTE", "RUTA"],
+    server: ["SERVIDOR", "SERVER", "SERVIDOR"], route: ["ROTA", "ROUTE", "RUTA"],
     routeRemote: ["Internet (túnel seguro)", "Internet (secure tunnel)", "Internet (túnel seguro)"], routeLan: ["Mesmo Wi-Fi", "Same Wi-Fi", "Mismo Wi-Fi"],
     device: ["ESTE APARELHO", "THIS DEVICE", "ESTE DISPOSITIVO"], since: ["DESDE", "SINCE", "DESDE"], confirmOff: ["Desconectar este celular do Jarvis?",
-      "Disconnect this phone from Jarvis?", "¿Desconectar este móvil de Jarvis?"], noCamera: ["Este navegador não lê QR code: use a câmera do celular.",
-      "This browser can't read QR codes: use the phone camera.", "Este navegador no lee códigos QR: use la cámara del móvil."],
+      "Disconnect this phone from Jarvis?", "¿Desconectar este móvil de Jarvis?"], noCamera: ["Não consegui abrir a câmera.", "Could not open the camera.",
+      "No pude abrir la cámara."],
     dictate: ["Toque no 🎤 do teclado para ditar.", "Tap the keyboard 🎤 to dictate.", "Toque el 🎤 del teclado para dictar."],
     expired: ["Pareamento expirado ou revogado.", "Pairing expired or revoked.", "Emparejamiento vencido o revocado."],
+    recording: ["Ouvindo… toque de novo para enviar", "Listening… tap again to send", "Escuchando… toque de nuevo para enviar"],
+    sending: ["Enviando para o Jarvis…", "Sending to Jarvis…", "Enviando a Jarvis…"], heardNothing: ["Não ouvi nada.", "I heard nothing.", "No oí nada."],
+    offWifi: ["Fora do Wi-Fi do PC: ligue o acesso remoto na aba CELULAR do PC.", "Away from the PC's Wi-Fi: turn on remote access in the PC's PHONE tab.",
+      "Fuera del Wi-Fi del PC: active el acceso remoto en la pestaña MÓVIL del PC."],
   };
-  const state = { conn: null, base: "", seq: 0, synced: false, polling: false, failures: 0, live: 0, rows: new Map(), name: "Jarvis",
-    lang: "pt-BR", speak: false, pollTimer: 0 };
+  const state = { conn: null, base: "", route: "", seq: 0, synced: false, polling: false, failures: 0, live: 0, rows: new Map(), name: "Jarvis",
+    lang: "pt-BR", speak: true, quiet: REMOTE_APP, pollTimer: 0, mood: "idle", themeKey: "", modelsVersion: "" };
 
   /* ---------- storage and language ---------- */
 
   function loadConn() {
     try {
       state.conn = JSON.parse(window.localStorage.getItem(STORE) || "null");
-      state.speak = window.localStorage.getItem("jarvis.remote.speak") === "on";
+      const speak = window.localStorage.getItem("jarvis.remote.speak");
+      const quiet = window.localStorage.getItem("jarvis.remote.quiet");
+      if (speak) state.speak = speak === "on";
+      if (quiet) state.quiet = quiet === "on";
       const nav = (navigator.language || "pt").slice(0, 2);
       state.lang = window.localStorage.getItem("jarvis.remote.lang") || (nav === "en" ? "en-US" : nav === "es" ? "es-ES" : "pt-BR");
       if (!LANGS.includes(state.lang)) state.lang = "pt-BR";
@@ -91,6 +98,14 @@
     }
   }
 
+  function remember(key, on) {
+    try {
+      window.localStorage.setItem(key, on ? "on" : "off");
+    } catch (_) {
+      /* Not remembered. */
+    }
+  }
+
   const t = (key) => (TEXT[key] || [key])[LANGS.indexOf(state.lang)] || TEXT[key]?.[0] || key;
 
   function applyLang() {
@@ -100,8 +115,8 @@
     });
     $("#ask").placeholder = t("ask");
     $$("#langs button").forEach((button) => button.classList.toggle("is-active", button.dataset.lang === state.lang));
-    buildModules();
     renderConn();
+    document.dispatchEvent(new CustomEvent("jarvis:phone-lang", { detail: { lang: state.lang } }));
   }
 
   function node(tag, className, text) {
@@ -147,29 +162,50 @@
     throw new Error("PC offline");
   }
 
-  /** The base of every call: "" on the PC's own page, the tunnel address in the installed app. */
+  async function reachable(base) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 1600);
+    try {
+      const response = await fetch(`${base}/m/state?since=999999999`, { headers: { Authorization: `Bearer ${state.conn?.token || ""}` },
+        cache: "no-store", signal: controller.signal });
+      return response.ok || response.status === 401;
+    } catch (_) {
+      return false;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  /** The base of every call: "" on the PC's own page; the PC on the Wi-Fi (Android app at home); else the tunnel. */
   async function resolveBase(force = false) {
     if (!REMOTE_APP) {
       state.base = "";
+      state.route = "lan";
       return "";
     }
-    if (!state.conn?.topic) throw new Error("sem servidor");
     if (state.base && !force) return state.base;
+    const lan = (state.conn?.lan || "").replace(/\/+$/, "");
+    if (NATIVE && lan && await reachable(lan)) {
+      state.base = lan;
+      state.route = "lan";
+      return lan;
+    }
+    if (!state.conn?.topic) throw new Error(lan ? t("offWifi") : "sem servidor");
     state.base = await latestAddress(state.conn.topic);
-    state.conn.base = state.base;
-    saveConn();
+    state.route = "remote";
     return state.base;
   }
 
-  async function api(path, { method = "GET", body, raw, timeout } = {}) {
-    const headers = { Authorization: `Bearer ${state.conn?.token || ""}` };
+  async function api(path, { method = "GET", body, raw, timeout, headers: extra = {}, signal } = {}) {
+    const headers = { Authorization: `Bearer ${state.conn?.token || ""}`, ...extra };
     if (body !== undefined && !raw) headers["Content-Type"] = "application/json";
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), timeout || (raw ? 120000 : 10000));
+    const timer = window.setTimeout(() => controller.abort(), timeout || (raw ? 120000 : 12000));
+    signal?.addEventListener("abort", () => controller.abort(), { once: true }); // the caller's clock covers the body too
     try {
       const response = await fetch(`${state.base}${path}`, { method, headers, body: raw ? body : body === undefined ? undefined : JSON.stringify(body),
         cache: "no-store", signal: controller.signal });
-      if (response.status === 401) {
+      if (response.status === 401 && path !== "/m/pair") {
         disconnect(false);
         toast(t("expired"), true);
         throw new Error(t("expired"));
@@ -187,6 +223,48 @@
     return data;
   }
 
+  /** A big file in 32 KB slices, a few at a time, each retried on its own URL: security software on the PC
+      now and then holds a long local answer for ~19 s and resets it (the desktop's holo-loader.js does the same). */
+  async function sliced(path, size = 32 * 1024) {
+    const wait = state.route === "remote" ? 9000 : 4000;
+    const part = async (start) => {
+      let last = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), wait);
+        try {
+          const response = await api(`${path}?r=${start}.${attempt}.${Date.now() % 1e6}`, { timeout: wait, signal: controller.signal,
+            headers: { Range: `bytes=${start}-${start + size - 1}` } });
+          if (response.status !== 200 && response.status !== 206) throw new Error(`modelo ${response.status}`);
+          const total = Number((response.headers.get("Content-Range") || "").split("/")[1]) || 0;
+          return { data: new Uint8Array(await response.arrayBuffer()), total, whole: response.status === 200 };
+        } catch (error) {
+          last = error;
+          await new Promise((resolve) => window.setTimeout(resolve, 200 * (attempt + 1)));
+        } finally {
+          window.clearTimeout(timer);
+        }
+      }
+      throw last;
+    };
+    const first = await part(0);
+    if (first.whole || first.total <= first.data.length) return first.data.buffer; // small, or no slices offered
+    const bytes = new Uint8Array(first.total);
+    bytes.set(first.data, 0);
+    const starts = [];
+    for (let start = size; start < first.total; start += size) starts.push(start);
+    let next = 0;
+    const worker = async () => {
+      while (next < starts.length) {
+        const start = starts[next];
+        next += 1;
+        bytes.set((await part(start)).data, start);
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    return bytes.buffer;
+  }
+
   /* ---------- entry screen and pairing ---------- */
 
   function bootLine(key, status = "") {
@@ -201,10 +279,16 @@
     };
   }
 
-  function deviceName() {
+  async function deviceName() {
+    try {
+      const data = await navigator.userAgentData?.getHighEntropyValues?.(["model"]);
+      if (data?.model) return data.model.slice(0, 32);
+    } catch (_) {
+      /* Not offered. */
+    }
     const agent = navigator.userAgent;
     const model = /\(Linux; Android [^;]+; ([^)]+?)(?: Build|\))/.exec(agent)?.[1];
-    if (model) return model.trim().slice(0, 32);
+    if (model && model.trim().length > 1) return model.trim().slice(0, 32);
     if (/iPhone/.test(agent)) return "iPhone";
     if (/iPad/.test(agent)) return "iPad";
     return /Android/.test(agent) ? "Android" : "Celular";
@@ -214,82 +298,95 @@
     document.body.dataset.screen = "entry";
     $("#app").hidden = true;
     $("#entry").hidden = false;
-    $("#show-code").hidden = REMOTE_APP; // 6 digits only on the same Wi-Fi
+    $("#show-code").hidden = REMOTE_APP && !NATIVE; // 6 digits: the Wi-Fi only
   }
 
-  /** Pairs with what the QR code carried: {t: topic, k: secret, n: name, l: lan url}. */
+  async function pairAt(base, code) {
+    const response = await fetch(`${base}/m/pair`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, name: await deviceName() }) });
+    const data = await response.json().catch(() => ({}));
+    if (!data.ok) throw new Error(data.error || "pareamento recusado");
+    return data;
+  }
+
+  /** What the QR code carried: {t: topic, k: secret, n: name, l: Wi-Fi address}. */
   async function pairRemote(config) {
     const locate = bootLine("bootLocate");
+    state.conn = { topic: config.t, token: "", name: config.n || "Jarvis", since: Date.now(), lan: config.l || "" };
     try {
-      state.conn = { topic: config.t, token: "", name: config.n || "Jarvis", since: Date.now(), lan: config.l || "" };
       await resolveBase(true);
-      locate("OK");
+      locate(state.route === "lan" ? "WI-FI" : "OK");
     } catch (error) {
       locate("OFFLINE", false);
+      state.conn = null;
       throw error;
     }
-    const tunnel = bootLine("bootTunnel");
-    tunnel("TLS");
+    if (state.route === "remote") bootLine("bootTunnel")("TLS");
     const auth = bootLine("bootAuth");
-    const response = await fetch(`${state.base}/m/pair`, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: config.k, name: deviceName() }) });
-    const data = await response.json().catch(() => ({}));
-    if (!data.ok) {
+    try {
+      const data = await pairAt(state.base, config.k);
+      auth("OK");
+      Object.assign(state.conn, { token: data.token, name: data.name || state.conn.name });
+      saveConn();
+    } catch (error) {
       auth("NEGADO", false);
       state.conn = null;
-      throw new Error(data.error || "pareamento recusado");
+      throw error;
     }
-    auth("OK");
-    state.conn.token = data.token;
-    state.conn.name = data.name || state.conn.name;
-    saveConn();
   }
 
-  async function pairLocal(code) {
-    const clean = /^\d[\d ]*$/.test(String(code)) ? String(code).replace(/\D/g, "") : String(code); // 6 digits or the QR secret
+  /** The 6-digit code: on the PC's own page (same origin) or, in the Android app, a Wi-Fi QR code. */
+  async function pairLocal(code, base = "") {
     const auth = bootLine("bootAuth");
-    const response = await fetch("/m/pair", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: clean, name: deviceName() }) });
-    const data = await response.json().catch(() => ({}));
-    if (!data.ok) {
+    try {
+      const data = await pairAt(base, code);
+      auth("OK");
+      state.conn = { topic: "", token: data.token, name: data.name || "Jarvis", since: Date.now(), lan: base || location.origin };
+      state.base = base;
+      saveConn();
+    } catch (error) {
       auth("NEGADO", false);
-      throw new Error(data.error || "código recusado");
+      throw error;
     }
-    auth("OK");
-    state.conn = { topic: "", token: data.token, name: data.name || "Jarvis", since: Date.now(), lan: location.origin };
-    saveConn();
   }
 
-  function fromFragment() {
-    const hash = location.hash || "";
-    const packed = /[#&]c=([A-Za-z0-9_-]+)/.exec(hash)?.[1];
-    const digits = /[#&]pair=(\d{6})/.exec(hash)?.[1];
-    history.replaceState(null, "", location.pathname); // the secret does not stay in the address bar
+  function parsePairing(text) {
+    const packed = /[#&]c=([A-Za-z0-9_-]+)/.exec(text)?.[1];
     if (packed) {
       try {
-        const text = atob(packed.replace(/-/g, "+").replace(/_/g, "/"));
-        return { remote: JSON.parse(decodeURIComponent(escape(text))) };
+        const raw = atob(packed.replace(/-/g, "+").replace(/_/g, "/"));
+        return { remote: JSON.parse(decodeURIComponent(escape(raw))) };
       } catch (_) {
         return null;
       }
     }
+    const lan = /^(https?:\/\/[^/#]+)\/?#pair=(\d{6})/.exec(text);
+    if (lan) return { digits: lan[2], base: lan[1] };
+    const digits = /[#&]pair=(\d{6})/.exec(text)?.[1];
     return digits ? { digits } : null;
+  }
+
+  function fromFragment() {
+    const found = parsePairing(location.hash || "");
+    if (location.hash) history.replaceState(null, "", location.pathname); // the secret does not stay in the address bar
+    return found;
   }
 
   async function connectFlow(pairing) {
     showEntry();
     $("#entry-log").replaceChildren();
-    const boot = bootLine("bootScan");
-    boot("OK");
+    bootLine("bootScan")("OK");
     try {
       if (pairing?.remote) {
         if (REMOTE_APP) await pairRemote(pairing.remote);
         else await pairLocal(pairing.remote.k); // the remote QR read on the PC's own page: same secret, same Wi-Fi
-      } else if (pairing?.digits && !REMOTE_APP) {
-        await pairLocal(pairing.digits);
+      } else if (pairing?.digits) {
+        if (NATIVE && pairing.base) await pairLocal(pairing.digits, pairing.base);
+        else if (!REMOTE_APP) await pairLocal(pairing.digits);
+        else throw new Error(t("hint"));
       } else if (state.conn?.token) {
         const locate = bootLine("bootLocate");
-        await resolveBase(true).then(() => locate("OK"), (error) => {
+        await resolveBase(true).then(() => locate(state.route === "lan" ? "WI-FI" : "OK"), (error) => {
           locate("OFFLINE", false);
           throw error;
         });
@@ -306,11 +403,11 @@
     }
   }
 
-  /* ---------- QR scanning inside the app (where the browser can) ---------- */
+  /* ---------- QR scanning inside the app (camera + BarcodeDetector or jsQR) ---------- */
 
   async function scan() {
-    if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
-      toast(t("noCamera"));
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast(t("noCamera"), true);
       return;
     }
     const box = $("#scanner");
@@ -318,14 +415,21 @@
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-    } catch (error) {
+    } catch (_) {
       toast(t("noCamera"), true);
       return;
     }
     box.hidden = false;
     video.srcObject = stream;
     await video.play().catch(() => {});
-    const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+    const detector = "BarcodeDetector" in window ? new window.BarcodeDetector({ formats: ["qr_code"] }) : null;
+    if (!detector && !window.jsQR) { // the reader in JavaScript (256 KB) only when the phone has none built in
+      const script = document.createElement("script");
+      script.src = "vendor/jsQR.js";
+      document.head.append(script);
+    }
+    const canvas = $("#scanner-canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
     let done = false;
     const stop = () => {
       done = true;
@@ -333,29 +437,211 @@
       box.hidden = true;
     };
     $("#scanner-close").onclick = stop;
+    const read = async () => {
+      if (detector) return (await detector.detect(video))[0]?.rawValue || "";
+      if (!window.jsQR || !video.videoWidth) return "";
+      const scale = Math.min(1, 640 / video.videoWidth);
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const image = context.getImageData(0, 0, canvas.width, canvas.height);
+      return window.jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" })?.data || "";
+    };
     const loop = async () => {
       if (done) return;
       try {
-        const codes = await detector.detect(video);
-        const value = codes[0]?.rawValue || "";
-        const packed = /[#&]c=([A-Za-z0-9_-]+)/.exec(value)?.[1];
-        const digits = /[#&]pair=(\d{6})/.exec(value)?.[1];
-        if (packed || digits) {
+        const value = await read();
+        const pairing = value ? parsePairing(value) : null;
+        if (pairing) {
           stop();
           vibrate(60);
-          history.replaceState(null, "", `${location.pathname}#${packed ? `c=${packed}` : `pair=${digits}`}`);
-          connectFlow(fromFragment());
+          connectFlow(pairing);
           return;
         }
       } catch (_) {
         /* Next frame. */
       }
-      window.setTimeout(loop, 250);
+      window.setTimeout(loop, 200);
     };
     loop();
   }
 
-  /* ---------- the app ---------- */
+  /* ---------- the PC's voice, played here ---------- */
+
+  const audio = { ctx: null, analyser: null, data: null, queue: [], playing: null, generation: 0 };
+
+  function audioContext() {
+    if (!audio.ctx) {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) return null;
+      audio.ctx = new Context();
+      audio.analyser = audio.ctx.createAnalyser();
+      audio.analyser.fftSize = 512;
+      audio.analyser.connect(audio.ctx.destination);
+      audio.data = new Uint8Array(audio.analyser.fftSize);
+    }
+    if (audio.ctx.state === "suspended") audio.ctx.resume().catch(() => {});
+    return audio.ctx;
+  }
+
+  function stopSpeech() {
+    audio.generation += 1;
+    audio.queue = [];
+    try {
+      audio.playing?.stop();
+    } catch (_) {
+      /* Already over. */
+    }
+    audio.playing = null;
+  }
+
+  /** Each sentence is fetched as soon as it is known (synthesis takes a moment), played in order. */
+  function enqueueSpeech(text) {
+    if (!state.speak || !text) return;
+    const context = audioContext();
+    if (!context) return;
+    const generation = audio.generation;
+    const buffer = api("/m/speech", { method: "POST", body: { text }, timeout: 40000 })
+      .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(`voz ${response.status}`))))
+      .then((data) => context.decodeAudioData(data));
+    buffer.catch(() => {});
+    audio.queue.push({ buffer, generation });
+    if (!audio.playing) playNext();
+  }
+
+  async function playNext() {
+    const job = audio.queue.shift();
+    if (!job) {
+      audio.playing = null;
+      return;
+    }
+    audio.playing = { stop() {} }; // reserved while the audio arrives
+    try {
+      const buffer = await job.buffer;
+      if (job.generation !== audio.generation) return;
+      const source = audio.ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audio.analyser);
+      source.onended = () => {
+        if (audio.playing === source) {
+          audio.playing = null;
+          playNext();
+        }
+      };
+      audio.playing = source;
+      source.start();
+    } catch (_) {
+      if (job.generation === audio.generation) {
+        audio.playing = null;
+        playNext(); // a sentence that failed is skipped, not the rest
+      }
+    }
+  }
+
+  function outputLevel() {
+    if (!audio.analyser || !audio.playing?.buffer) return 0;
+    audio.analyser.getByteTimeDomainData(audio.data);
+    let sum = 0;
+    for (const value of audio.data) sum += ((value - 128) / 128) ** 2;
+    return Math.min(1, Math.sqrt(sum / audio.data.length) * 4);
+  }
+
+  /* ---------- the microphone: recorded here, understood by the PC's Whisper ---------- */
+
+  const rec = { stream: null, recorder: null, chunks: [], analyser: null, data: null, frame: 0, level: 0 };
+
+  function canRecord() {
+    return Boolean(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  }
+
+  async function startRecording() {
+    if (!canRecord()) {
+      $("#ask").focus();
+      toast(t("dictate"));
+      return;
+    }
+    stopSpeech();
+    try {
+      rec.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (_) {
+      toast(t("noCamera").replace("câmera", "microfone").replace("camera", "microphone").replace("cámara", "micrófono"), true);
+      return;
+    }
+    const type = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/ogg;codecs=opus"].find((kind) => window.MediaRecorder.isTypeSupported?.(kind)) || "";
+    rec.recorder = new window.MediaRecorder(rec.stream, type ? { mimeType: type } : undefined);
+    rec.chunks = [];
+    rec.recorder.ondataavailable = (event) => {
+      if (event.data?.size) rec.chunks.push(event.data);
+    };
+    rec.recorder.onstop = upload;
+    rec.recorder.start(250);
+    const context = audioContext();
+    if (context) { // stops by itself after a silence, like the PC's microphone
+      const source = context.createMediaStreamSource(rec.stream);
+      rec.analyser = context.createAnalyser();
+      rec.analyser.fftSize = 1024;
+      rec.data = new Uint8Array(rec.analyser.fftSize);
+      source.connect(rec.analyser);
+    }
+    const started = performance.now();
+    let spoke = 0;
+    let quietSince = 0;
+    const watch = () => {
+      if (rec.recorder?.state !== "recording") return;
+      let level = 0;
+      if (rec.analyser) {
+        rec.analyser.getByteTimeDomainData(rec.data);
+        let sum = 0;
+        for (const value of rec.data) sum += ((value - 128) / 128) ** 2;
+        level = Math.sqrt(sum / rec.data.length);
+      }
+      rec.level = Math.min(1, level * 6);
+      const now = performance.now();
+      if (level > 0.035) {
+        spoke = spoke || now;
+        quietSince = 0;
+      } else if (spoke && !quietSince) {
+        quietSince = now;
+      }
+      if ((spoke && quietSince && now - quietSince > 1300) || now - started > 15000) {
+        stopRecording();
+        return;
+      }
+      rec.frame = window.requestAnimationFrame(watch);
+    };
+    rec.frame = window.requestAnimationFrame(watch);
+    document.body.classList.add("is-recording");
+    toast(t("recording"));
+    vibrate(25);
+  }
+
+  function stopRecording() {
+    window.cancelAnimationFrame(rec.frame);
+    document.body.classList.remove("is-recording");
+    rec.level = 0;
+    if (rec.recorder?.state === "recording") rec.recorder.stop();
+    rec.stream?.getTracks().forEach((track) => track.stop());
+  }
+
+  async function upload() {
+    const type = rec.recorder?.mimeType || "audio/webm";
+    const blob = new Blob(rec.chunks, { type });
+    rec.recorder = null;
+    if (blob.size < 2500) {
+      toast(t("heardNothing"));
+      return;
+    }
+    toast(t("sending"));
+    try {
+      await json(`/m/listen?quiet=${state.quiet ? 1 : 0}`, { method: "POST", body: blob, raw: true, timeout: 60000 });
+      showPane("talk");
+      poll(true);
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  /* ---------- conversation ---------- */
 
   function addRow(kind, text, turn) {
     const log = $("#log");
@@ -376,22 +662,12 @@
     log.scrollTop = log.scrollHeight;
   }
 
-  function speak(text) {
-    if (!state.speak || !window.speechSynthesis || !text) return;
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = state.lang;
-    const voice = window.speechSynthesis.getVoices().find((item) => item.lang?.toLowerCase().startsWith(state.lang.slice(0, 2)));
-    if (voice) utterance.voice = voice;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }
-
   function handle(event, live) {
     if (event.type === "heard") addRow("user", event.text, event.turn);
-    else if (event.type === "reply") {
-      addRow("jarvis", event.text, event.turn);
-      if (live && event.done) speak(event.text);
-    } else if (event.type === "tool") addRow("tool", event.label, `${event.turn}-${event.seq}`);
+    else if (event.type === "reply") addRow("jarvis", event.text, event.turn);
+    else if (event.type === "tool") addRow("tool", event.label, `${event.turn}-${event.seq}`);
+    else if (event.type === "say" && live) enqueueSpeech(event.text);
+    else if (event.type === "ignored" && live && event.why) toast(event.why, true);
   }
 
   function setTheme(theme) {
@@ -400,6 +676,12 @@
     document.documentElement.style.setProperty("--hud", theme.accent);
     document.documentElement.style.setProperty("--hud-rgb", [(value >> 16) & 255, (value >> 8) & 255, value & 255].join(", "));
     document.documentElement.style.setProperty("--accent2", theme.accent2 || "#ffb45e");
+    const key = JSON.stringify(theme);
+    if (key !== state.themeKey) {
+      state.themeKey = key;
+      state.theme = theme;
+      document.dispatchEvent(new CustomEvent("jarvis:phone-theme", { detail: { theme } }));
+    }
   }
 
   function gauges(data) {
@@ -426,6 +708,7 @@
       $$("[data-brand]").forEach((item) => {
         item.textContent = state.name.toUpperCase();
       });
+      state.modelsVersion = String(data.models || "");
       setTheme(data.theme);
       for (const event of data.events || []) {
         state.seq = Math.max(state.seq, event.seq);
@@ -433,9 +716,9 @@
       }
       state.seq = Math.max(state.seq, data.seq || 0);
       state.synced = true;
-      const mood = data.state || "idle";
-      document.body.dataset.state = mood;
-      $("#state").textContent = STATES[state.lang][mood] || mood.toUpperCase();
+      state.mood = data.state || "idle";
+      document.body.dataset.state = state.mood;
+      $("#state").textContent = STATES[state.lang][state.mood] || state.mood.toUpperCase();
       $("#dot").classList.add("is-on");
       $("#host").textContent = data.telemetry?.hostname || "";
       if (data.telemetry) gauges(data.telemetry);
@@ -444,7 +727,7 @@
       $("#dot").classList.remove("is-on");
       if (state.failures >= 3) {
         $("#lost").hidden = false;
-        if (REMOTE_APP && state.failures % 3 === 0) resolveBase(true).catch(() => {}); // the tunnel may have a new address
+        if (REMOTE_APP && state.failures % 3 === 0) resolveBase(true).catch(() => {}); // a new tunnel address, or back on the Wi-Fi
       }
     } finally {
       state.polling = false;
@@ -455,9 +738,11 @@
     const message = String(text || "").trim();
     if (!message) return;
     vibrate();
+    stopSpeech();
+    audioContext(); // a tap: the phone allows the voice to play from now on
     $("#ask").value = "";
     try {
-      await json("/m/ask", { method: "POST", body: { text: message } });
+      await json("/m/ask", { method: "POST", body: { text: message, quiet: state.quiet } });
       showPane("talk");
       poll(true);
     } catch (error) {
@@ -465,80 +750,21 @@
     }
   }
 
-  function setupMic() {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const button = $("#mic");
-    if (!Recognition || !window.isSecureContext) {
-      button.addEventListener("click", () => {
-        $("#ask").focus();
-        toast(t("dictate"));
-      });
-      return;
-    }
-    const recognition = new Recognition();
-    recognition.interimResults = true;
-    let listening = false;
-    recognition.onresult = (event) => {
-      const result = event.results[event.results.length - 1];
-      $("#ask").value = result[0].transcript;
-      if (result.isFinal) ask(result[0].transcript);
-    };
-    const end = () => {
-      listening = false;
-      button.classList.remove("is-live");
-    };
-    recognition.onend = end;
-    recognition.onerror = () => {
-      end();
-      $("#ask").focus();
-    };
-    button.addEventListener("click", () => {
-      if (listening) {
-        recognition.stop();
-        return;
-      }
-      recognition.lang = state.lang;
-      try {
-        recognition.start();
-        listening = true;
-        button.classList.add("is-live");
-        vibrate(25);
-      } catch (_) {
-        $("#ask").focus();
-      }
-    });
-  }
+  /* ---------- panes ---------- */
 
   function showPane(name) {
     $$(".pane").forEach((pane) => pane.classList.toggle("is-active", pane.id === `pane-${name}`));
     $$(".tabs [data-pane]").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.pane === name));
-    if (name !== "screen") setLive(false);
+    if (name !== "control") setLive(false);
     if (name === "settings") renderConn();
-  }
-
-  function buildModules() {
-    const column = LANGS.indexOf(state.lang);
-    $("#modules").replaceChildren(...MODULES.map(([view, labels]) => {
-      const button = node("button", view === "finance" ? "is-wide" : "", labels[column]);
-      button.type = "button";
-      button.addEventListener("click", async () => {
-        vibrate();
-        try {
-          await json("/m/view", { method: "POST", body: { view } });
-          toast(`PC: ${labels[column].toLowerCase()}`);
-        } catch (error) {
-          toast(error.message, true);
-        }
-      });
-      return button;
-    }));
+    document.dispatchEvent(new CustomEvent("jarvis:phone-pane", { detail: { pane: name } }));
   }
 
   function renderConn() {
     const box = $("#conn");
     if (!box) return;
-    const rows = [[t("server"), state.conn?.name || "--"], [t("route"), REMOTE_APP ? t("routeRemote") : t("routeLan")],
-      [t("device"), deviceName()], [t("since"), state.conn?.since ? new Date(state.conn.since).toLocaleDateString(state.lang) : "--"]];
+    const rows = [[t("server"), state.conn?.name || "--"], [t("route"), state.route === "remote" ? t("routeRemote") : t("routeLan")],
+      [t("device"), state.device || "--"], [t("since"), state.conn?.since ? new Date(state.conn.since).toLocaleDateString(state.lang) : "--"]];
     box.replaceChildren(...rows.map(([term, value]) => {
       const item = node("div");
       item.append(node("dt", "", term), node("dd", "", value));
@@ -572,11 +798,11 @@
     $("#shot-live").checked = on;
     if (on) {
       screenshot();
-      state.live = window.setInterval(screenshot, REMOTE_APP ? 4000 : 2500);
+      state.live = window.setInterval(screenshot, state.route === "remote" ? 4000 : 2500);
     }
   }
 
-  async function upload(files) {
+  async function uploadFiles(files) {
     for (const file of files) {
       const row = node("li", "", `${file.name} · …`);
       $("#uploads").prepend(row);
@@ -591,9 +817,9 @@
     }
   }
 
-  async function disconnect(ask = true) {
-    if (ask && !window.confirm(t("confirmOff"))) return;
-    if (ask) {
+  async function disconnect(confirmFirst = true) {
+    if (confirmFirst && !window.confirm(t("confirmOff"))) return;
+    if (confirmFirst) {
       try {
         await json("/m/unpair", { method: "POST", body: {} });
       } catch (_) {
@@ -601,6 +827,7 @@
       }
     }
     window.clearInterval(state.pollTimer);
+    stopSpeech();
     state.conn = null;
     state.base = "";
     state.seq = 0;
@@ -620,7 +847,8 @@
     renderConn();
     window.clearInterval(state.pollTimer);
     poll(true);
-    state.pollTimer = window.setInterval(poll, REMOTE_APP ? 1500 : 1000);
+    state.pollTimer = window.setInterval(poll, state.route === "remote" ? 1500 : 1000);
+    document.dispatchEvent(new CustomEvent("jarvis:phone-ready"));
   }
 
   async function setLanguage(code) {
@@ -677,17 +905,68 @@
     }, 1000);
   }
 
+  /* ---------- shared with panel.js and holo.js ---------- */
+
+  window.jarvisPhone = {
+    json,
+    api,
+    t,
+    toast,
+    ask,
+    vibrate,
+    showPane,
+    node,
+    get lang() { return state.lang; },
+    get theme() { return state.theme; },
+    get modelsVersion() { return state.modelsVersion; },
+    /** The hologram: what the assistant is doing, and how loud (its voice here, or the microphone). */
+    voice() {
+      if (document.body.classList.contains("is-recording")) return { state: "armed", level: rec.level };
+      const level = outputLevel();
+      if (level > 0.01) return { state: "speaking", level };
+      return { state: state.mood === "speaking" ? "idle" : state.mood, level: 0 };
+    },
+    /** A model file through the server (cached here by its version): models/... -> /m/model/... */
+    async model(path, kind) {
+      const url = `/m/model/${path.replace(/^models\//, "")}`;
+      const key = `https://jarvis.local${url}?v=${encodeURIComponent(state.modelsVersion)}`;
+      let cache = null;
+      try {
+        cache = await caches.open("jarvis-models");
+        const hit = await cache.match(key);
+        if (hit) return kind === "json" ? hit.json() : hit.arrayBuffer();
+      } catch (_) {
+        cache = null; // no Cache Storage here: straight from the PC every time
+      }
+      let bytes;
+      if (kind === "json") {
+        const response = await api(url, { timeout: 30000 });
+        if (!response.ok) throw new Error(`modelo ${response.status}`);
+        bytes = await response.arrayBuffer();
+      } else {
+        bytes = await sliced(url);
+      }
+      if (cache) cache.put(key, new Response(bytes.slice(0))).catch(() => {});
+      return kind === "json" ? JSON.parse(new TextDecoder().decode(bytes)) : bytes;
+    },
+    /** Shows a module on the PC's screen (and, for the map, a place). */
+    async onPc(view, command = "", arg = "") {
+      try {
+        await json("/m/view", { method: "POST", body: { view, command, arg } });
+        toast(`PC ✓`);
+      } catch (error) {
+        toast(error.message, true);
+      }
+    },
+  };
+
   function init() {
     loadConn();
     background();
-    setupMic();
+    deviceName().then((name) => {
+      state.device = name;
+    });
     applyLang();
-    const bars = $("#orb-bars");
-    for (let i = 0; i < 24; i += 1) {
-      const bar = node("i");
-      bar.style.setProperty("--i", i);
-      bars.append(bar);
-    }
     $("#scan").addEventListener("click", scan);
     $("#show-code").addEventListener("click", () => {
       $("#pair-form").hidden = !$("#pair-form").hidden;
@@ -701,6 +980,12 @@
       event.preventDefault();
       ask($("#ask").value);
     });
+    $("#mic").addEventListener("click", () => {
+      audioContext();
+      if (document.body.classList.contains("is-recording")) stopRecording();
+      else startRecording();
+    });
+    document.addEventListener("pointerdown", () => audioContext(), { passive: true }); // phones only play audio after a touch
     $$(".tabs [data-pane]").forEach((tab) => tab.addEventListener("click", () => {
       vibrate(6);
       showPane(tab.dataset.pane);
@@ -716,7 +1001,7 @@
     $("#shot").addEventListener("click", screenshot);
     $("#shot-live").addEventListener("change", (event) => setLive(event.target.checked));
     $("#files").addEventListener("change", (event) => {
-      upload([...event.target.files]);
+      uploadFiles([...event.target.files]);
       event.target.value = "";
     });
     $("#open-form").addEventListener("submit", async (event) => {
@@ -735,14 +1020,24 @@
     speakToggle.checked = state.speak;
     speakToggle.addEventListener("change", () => {
       state.speak = speakToggle.checked;
-      try {
-        window.localStorage.setItem("jarvis.remote.speak", state.speak ? "on" : "off");
-      } catch (_) {
-        /* Not remembered. */
-      }
+      remember("jarvis.remote.speak", state.speak);
+      if (!state.speak) stopSpeech();
+    });
+    const quietToggle = $("#quiet-toggle");
+    quietToggle.checked = state.quiet;
+    quietToggle.addEventListener("change", () => {
+      state.quiet = quietToggle.checked;
+      remember("jarvis.remote.quiet", state.quiet);
     });
     $("#disconnect").addEventListener("click", () => disconnect(true));
-    if (REMOTE_APP && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+    if (REMOTE_APP && !NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+    if (NATIVE) {
+      window.Capacitor?.Plugins?.App?.addListener?.("backButton", () => { // Android's back key: one step back, then out
+        if ($("#pane-panel").classList.contains("is-active") && !$("#module").hidden) document.dispatchEvent(new CustomEvent("jarvis:phone-back"));
+        else if (!$("#pane-talk").classList.contains("is-active")) showPane("talk");
+        else window.Capacitor.Plugins.App.minimizeApp?.();
+      });
+    }
     connectFlow(fromFragment());
   }
 
