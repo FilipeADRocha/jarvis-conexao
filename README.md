@@ -7,4 +7,5 @@ Android: o app instalável (APK) sai do próprio PC — aba **CELULAR** → **//
 
 Este repositório contém apenas os arquivos estáticos do app. Nenhuma chave, endereço ou token fica aqui.
 Usa [three.js](https://threejs.org) (MIT) e [jsQR](https://github.com/cozmo/jsQR) (Apache-2.0); as licenças
-estão em `vendor/`.
+estão em `vendor/`. O mapa global (`geo/`) usa dados do [Natural Earth](https://www.naturalearthdata.com) (domínio
+público) e do [GeoNames](https://www.geonames.org) (CC BY 4.0).

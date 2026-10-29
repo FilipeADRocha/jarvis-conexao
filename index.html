@@ -13,6 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="map.css">
   <link rel="stylesheet" href="mobile.css">
 </head>
 <body data-screen="entry">
@@ -80,6 +81,59 @@
             <button type="button" class="on-pc" id="module-pc" data-i18n="onPc">NO PC</button>
           </header>
           <div class="module-body" id="module-body"></div>
+          <!-- MAPA: the PC's own globe and dossier (globe.js, map-intel.js, map.css), the panels in one column -->
+          <div class="gl-layout m-map" id="m-map" hidden>
+            <div class="vx-panel gl-search">
+              <h3 class="vx-head">// BUSCA</h3>
+              <input id="gl-search" type="search" placeholder="País, estado ou cidade" aria-label="Buscar país, estado ou cidade" autocomplete="off" enterkeyhint="search">
+              <ul class="gl-results" id="gl-results"></ul>
+            </div>
+            <div class="gl-stage">
+              <header class="gl-title">
+                <h2>MAPA <span>GLOBAL</span></h2>
+                <p id="gl-status">CARREGANDO…</p>
+              </header>
+              <div class="m-globe">
+                <canvas class="gl-canvas" id="gl-canvas" aria-label="Globo interativo com países e estados"></canvas>
+                <div class="gl-controls">
+                  <button type="button" id="gl-zoom-in" title="Aproximar">+</button>
+                  <button type="button" id="gl-zoom-out" title="Afastar">−</button>
+                  <button type="button" id="gl-reset" title="Visão global">⟲</button>
+                  <button type="button" id="gl-spin" title="Girar sozinho" aria-pressed="true">⟳</button>
+                </div>
+                <div class="gl-scale" aria-hidden="true"><i id="gl-scale-bar"></i><span id="gl-scale-text">--</span><b id="gl-zoom-level">ZOOM 1,0×</b></div>
+              </div>
+            </div>
+            <div class="vx-panel gl-target" id="gl-target">
+              <h3 class="vx-head">// INFORMAÇÕES DO ALVO</h3>
+              <p class="vx-empty">Toque num país ou busque pelo nome.</p>
+            </div>
+            <div class="vx-panel">
+              <h3 class="vx-head"><span>// <span id="gl-list-title">PAÍSES</span></span> <em id="gl-list-count">--</em></h3>
+              <ul class="gl-list" id="gl-list"></ul>
+            </div>
+            <div class="vx-panel">
+              <h3 class="vx-head">// LOCALIZAÇÃO</h3>
+              <dl class="gl-coords">
+                <div><dt>CURSOR</dt><dd id="gl-cursor">--</dd></div>
+                <div><dt>CENTRO</dt><dd id="gl-center">--</dd></div>
+                <div><dt>ALTITUDE</dt><dd id="gl-altitude">--</dd></div>
+              </dl>
+            </div>
+            <div class="vx-panel">
+              <h3 class="vx-head">// CAMADAS</h3>
+              <div class="gl-layers" id="gl-layers">
+                <label><input type="checkbox" data-layer="borders" checked> Fronteiras</label>
+                <label><input type="checkbox" data-layer="states" checked> Estados e províncias</label>
+                <label><input type="checkbox" data-layer="places" checked> Capitais</label>
+                <label><input type="checkbox" data-layer="grid" checked> Grade</label>
+              </div>
+            </div>
+            <div class="vx-panel gl-wave-panel">
+              <h3 class="vx-head">// SINAL</h3>
+              <canvas class="gl-wave" id="gl-wave" aria-hidden="true"></canvas>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -154,6 +208,8 @@
   <div class="toast" id="toast" role="status"></div>
   <script src="mobile.js"></script>
   <script src="panel.js"></script>
+  <script src="globe.js"></script>
+  <script src="map-intel.js"></script>
   <script src="holo-loader.js"></script>
 </body>
 </html>

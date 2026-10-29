@@ -4,10 +4,10 @@
      tools/avatar_builder.py for Ultron and Sexta-feira). Each layer keeps its spin and sway, and the shader
      is the "JARVIS Holograma" material: light pulses running along every trace, shimmer, per-layer glow,
      AgX color and the compositor's bloom;
-   - "solid": a shaded character (tools/character_builder.py: HAL 9000, KinitoPET, Verity and AUTO;
-     tools/glados_builder.py and tools/sentinel_builder.py: GLaDOS and the Matrix sentinel, the user's own
-     models with their textures), a tree of named parts that BEHAVIORS below bring to life: blinking eyes,
-     gills, the helm, waving tentacles, a body that turns after the mouse, a face drawn live on a canvas.
+   - "solid": a shaded character (tools/character_builder.py: HAL 9000, KinitoPET and Verity; the user's own
+     textured models: tools/glados_builder.py GLaDOS, sentinel_builder.py the Sentinela, auto_builder.py AUTO),
+     a tree of named parts that BEHAVIORS below bring to life: blinking eyes, gills, the helm, living
+     tentacles, a body that turns after the mouse, a face drawn live on a canvas.
    The voice and the microphone drive both; the "faça você mesmo" settings scale, recolor, explode and
    pace them. The canvas is transparent: the page shows around the model and through its gaps. */
 import * as THREE from "three";
@@ -20,7 +20,7 @@ export const MODELS = {
   jarvis: { title: "JARVIS", path: "models/jarvis-holo" },
   ultron: { title: "ULTRON", path: "models/avatars/ultron" },
   sexta: { title: "SEXTA-FEIRA", path: "models/avatars/sexta" },
-  matrix: { title: "MATRIX", path: "models/avatars/matrix" },
+  sentinela: { title: "SENTINELA", path: "models/avatars/sentinela" },
   hal: { title: "HAL 9000", path: "models/avatars/hal" },
   kinito: { title: "KINITOPET", path: "models/avatars/kinito" },
   verity: { title: "VERITY", path: "models/avatars/verity" },
@@ -37,11 +37,14 @@ export const DEFAULTS = {
 const EXPLODE = { shell: 0, detail: 0.16, glow: -0.12, orbit: 0.4 };
 const TONES = { neutral: THREE.NeutralToneMapping, agx: THREE.AgXToneMapping, aces: THREE.ACESFilmicToneMapping };
 
+// Older names of models, in themes saved before: "Reator Arc" is now JARVIS, "Matrix" is the Sentinela.
+const RENAMED = { reator: "jarvis", matrix: "sentinela" };
+
 /** Which model a theme shows: the one chosen in "faça você mesmo", else the preset's own, else JARVIS. */
 export function modelOf(theme) {
-  const chosen = theme?.model?.id;
+  const chosen = RENAMED[theme?.model?.id] || theme?.model?.id;
   if (chosen && MODELS[chosen]) return chosen;
-  const preset = theme?.preset === "reator" ? "jarvis" : theme?.preset;
+  const preset = RENAMED[theme?.preset] || theme?.preset;
   return MODELS[preset] ? preset : "jarvis";
 }
 
@@ -122,16 +125,24 @@ const OUTPUT = `
     gl_FragColor = vec4( shown, max( cover, max( shown.r, max( shown.g, shown.b ) ) ) );
   }`;
 
-// The tentacles' wave (the Matrix sentinel): each vertex sways by how free it is (wave.x: 0 at the body, 1 at
-// the tips) with its own phase (wave.y), and the wave runs from the body out to the tips. Blender plays the
-// same motion with a geometry-nodes modifier (tools/sentinel_builder.py).
+// The Sentinela's tentacles, alive. Each vertex knows how free it is (wave.x: 0 in the body, 1 at the tips),
+// its own phase (wave.y: each tentacle on its own time) and how near the ground it hangs (wave.z). They writhe,
+// the wave running out to the tips and breathing stronger and weaker; the tips on the ground lift, reach a
+// little and settle again, one tentacle after another; and now and then a few of them twitch (uTwitch, around
+// the phase uTwitchPhase). Blender plays the same with a geometry-nodes modifier (tools/sentinel_builder.py).
 const WAVE = `{
     float flex = wave.x * wave.x;
     float t = uWaveTime;
+    float breath = 0.75 + 0.35 * sin(t * 0.37 + wave.y * 0.5);
     vec3 sway = vec3(sin(t * 1.7 + wave.y - wave.x * 5.0),
                      sin(t * 1.3 + wave.y * 1.6 - wave.x * 4.2 + 1.3),
                      cos(t * 1.5 + wave.y * 0.7 - wave.x * 4.6));
-    transformed += sway * uWaveAmp * flex;
+    float twitch = uTwitch * exp(-8.0 * pow(sin((wave.y - uTwitchPhase) * 0.5), 2.0));
+    transformed += sway * uWaveAmp * flex * (breath + 2.2 * twitch);
+    float curl = max(0.0, sin(t * 0.45 + wave.y * 1.3));
+    curl = curl * curl * curl;
+    transformed.z += curl * uLift * flex * wave.z;
+    transformed.y -= curl * uLift * 0.6 * flex * wave.z;
   }`;
 
 const cache = new Map(); // model id -> Promise<{manifest, buffer, images}>
@@ -210,7 +221,7 @@ function studio(renderer) {
    rig: the parts by name (node), their rest pose (reset before each frame), per-model state, the face canvas.
    ctx: t (animation seconds, paced), dt, time (real seconds), state and the voice (level, talk), float,
    secondary (the "órbitas" speed), pointer (-1..1 over the canvas), motion (the orb window's speed, px/s),
-   roam (half extents where the model may wander, dialogue only), camera. */
+   camera. */
 
 const wobble = (t, seed) => 0.5 * Math.sin(t * 1.3 + seed) + 0.3 * Math.sin(t * 2.7 + seed * 1.7) + 0.2 * Math.sin(t * 4.1 + seed * 2.3);
 
@@ -524,53 +535,24 @@ const BEHAVIORS = {
     helm.rotateZ(0.04 * Math.sin(ctx.t * 0.42 + 1) * ctx.float);
   },
 
-  matrix(rig, ctx) {
+  sentinela(rig, ctx) {
     const s = rig.state;
     const body = rig.node("corpo");
-    // Its tentacles never stop waving (the material's wave); thinking, they go faster. It hovers, breathing.
-    rig.waveSpeed = ctx.state === "thinking" ? 1.7 : 1;
-    rig.waveAmp = 1;
-    body.position.z += 0.03 * ctx.float * Math.sin(ctx.t * 1.05);
-    body.rotateY(0.04 * Math.sin(ctx.t * 0.7));
-    if (!ctx.roam) {
-      body.rotateZ(0.12 * Math.sin(ctx.t * 0.35));
-      return;
+    // It stays where it is and its tentacles live (the material's WAVE): they writhe, lift and settle, and now
+    // and then a few twitch. Thinking, they go faster; talking, they stir. The body breathes.
+    rig.waveSpeed = (ctx.state === "thinking" ? 1.7 : 1) * (1 + 0.6 * ctx.talk);
+    rig.waveAmp = 1 + 0.8 * ctx.talk;
+    s.nextTwitch ??= ctx.time + 2 + Math.random() * 3;
+    if (ctx.time > s.nextTwitch) {
+      s.twitchAt = ctx.time;
+      rig.twitchPhase = Math.random() * Math.PI * 4;
+      s.nextTwitch = ctx.time + 2.5 + Math.random() * 5;
     }
-    // In the dialogue it hunts around the screen like a spider: a dash to a spot, a stop facing the user, the
-    // next dash. Running, it turns toward where it goes, bobs at every step and its tentacles row harder.
-    const box = ctx.roam;
-    s.pos ??= { x: 0, z: 0 };
-    s.vel ??= { x: 0, z: 0 };
-    s.goal ??= { x: 0, z: 0 };
-    s.restUntil ??= ctx.time + 1.2;
-    const dx = s.goal.x - s.pos.x;
-    const dz = s.goal.z - s.pos.z;
-    const far = Math.hypot(dx, dz);
-    if (far < 0.06) {
-      if (s.restUntil === Infinity) s.restUntil = ctx.time + 0.6 + Math.random() * 1.8; // arrived: a stop
-      if (ctx.time > s.restUntil) { // the next spot, somewhere else on the stage
-        s.goal = { x: (Math.random() * 2 - 1) * box.x, z: (Math.random() * 2 - 1) * box.z };
-        if (Math.hypot(s.goal.x - s.pos.x, s.goal.z - s.pos.z) < 0.4) s.goal.x = -s.goal.x;
-        s.restUntil = Infinity;
-      }
-    }
-    const top = 1.7 * (ctx.calm ? 0.3 : 1);
-    const pull = far > 1e-4 ? Math.min(top, far * 3.2) / far : 0;
-    s.vel.x = ease(s.vel.x, dx * pull, 4.5, ctx.dt);
-    s.vel.z = ease(s.vel.z, dz * pull, 4.5, ctx.dt);
-    s.pos.x += s.vel.x * ctx.dt;
-    s.pos.z += s.vel.z * ctx.dt;
-    const speed = Math.hypot(s.vel.x, s.vel.z);
-    s.speed = ease(s.speed ?? 0, clamp(speed / top, 0, 1), 6, ctx.dt);
-    rig.group.position.x += s.pos.x;
-    rig.group.position.z += s.pos.z;
-    const heading = speed > 0.1 ? Math.atan2(s.vel.x, Math.abs(s.vel.z) * 0.6 + 0.25) : 0; // stopped: face the user
-    s.heading = ease(s.heading ?? 0, heading, 4, ctx.dt);
-    body.rotateZ(s.heading);
-    body.rotateX(clamp(-s.vel.z * 0.3, -0.35, 0.35)); // nose up climbing, down dropping
-    body.position.z += 0.03 * s.speed * Math.abs(Math.sin(ctx.time * 11)); // the steps
-    rig.waveSpeed *= 1 + 2.2 * s.speed;
-    rig.waveAmp = 1 + 0.7 * s.speed;
+    const since = ctx.time - (s.twitchAt ?? -10);
+    rig.twitch = since < 0.7 ? Math.sin(Math.PI * Math.min(1, since / 0.12)) * Math.exp(-since * 4) : 0; // a jolt, fading
+    body.position.z += 0.02 * ctx.float * Math.sin(ctx.t * 1.05);
+    body.rotateX(0.025 * Math.sin(ctx.t * 0.8));
+    body.rotateZ(0.1 * Math.sin(ctx.t * 0.33));
   },
 };
 
@@ -578,8 +560,7 @@ export class Hologram {
   /**
    * host: the element it fills; options: canvas, load(path, kind) -> json | ArrayBuffer, visible() -> bool,
    * voice() -> {state, level}, interactive (drag to turn, wheel to zoom), fit (share of the smaller side),
-   * motion() -> {x, y} (how fast the window moves, px/s), roam (a model that wanders may leave its frame:
-   * then frame() -> {width, height} is the frame it keeps its size by), onModel(id, manifest).
+   * motion() -> {x, y} (how fast the window moves, px/s), onModel(id, manifest).
    */
   constructor(host, options = {}) {
     this.host = host;
@@ -589,7 +570,7 @@ export class Hologram {
     this.layers = [];
     this.rig = null;
     this.ready = false;
-    this.view = { yaw: 0, pitch: 0, zoom: 1, velocity: 0, drag: null, ppu: 100 };
+    this.view = { yaw: 0, pitch: 0, zoom: 1, velocity: 0, drag: null };
     this.frame = 0;
     this.ticket = 0;
     this.pointer = { x: 0, y: 0, goalX: 0, goalY: 0, at: 0, active: false };
@@ -730,9 +711,7 @@ export class Hologram {
     this.model = id;
     this.manifest = manifest;
     this.solid = manifest.kind === "solid";
-    this.roaming = Boolean(this.options.roam && manifest.roam);
     this.host.classList.toggle("is-solid", this.solid);
-    this.host.classList.toggle("is-roaming", this.roaming);
     if (this.solid) this.buildSolid(manifest, buffer, images);
     else this.buildLines(manifest, buffer);
     const look = this.solid ? manifest.look || {} : {};
@@ -803,12 +782,13 @@ export class Hologram {
         });
       }
     }
-    if (spec.wave) { // waving tentacles: the geometry carries a "wave" attribute
-      const wave = { uWaveTime: { value: 0 }, uWaveAmp: { value: spec.wave.amp ?? 0.05 } };
+    if (spec.wave) { // living tentacles: the geometry carries a "wave" attribute
+      const wave = { uWaveTime: { value: 0 }, uWaveAmp: { value: spec.wave.amp ?? 0.05 }, uLift: { value: spec.wave.lift ?? 0.06 },
+        uTwitch: { value: 0 }, uTwitchPhase: { value: 0 } };
       material.userData.wave = wave;
       patches.push((shader) => {
         Object.assign(shader.uniforms, wave);
-        shader.vertexShader = `attribute vec2 wave;\nuniform float uWaveTime;\nuniform float uWaveAmp;\n${shader.vertexShader}`
+        shader.vertexShader = `attribute vec3 wave;\nuniform float uWaveTime, uWaveAmp, uLift, uTwitch, uTwitchPhase;\n${shader.vertexShader}`
           .replace("#include <begin_vertex>", `#include <begin_vertex>\n${WAVE}`);
       });
     }
@@ -857,12 +837,14 @@ export class Hologram {
       geometry.setAttribute("normal", new THREE.BufferAttribute(view(spec.normal, Int8Array), 3, true));
       if (spec.uv) geometry.setAttribute("uv", new THREE.BufferAttribute(view(spec.uv, Float32Array), 2));
       if (spec.color) geometry.setAttribute("color", new THREE.BufferAttribute(view(spec.color, Float32Array), 3));
-      if (spec.wave) geometry.setAttribute("wave", new THREE.BufferAttribute(view(spec.wave, Float32Array), 2));
+      if (spec.wave) {
+        geometry.setAttribute("wave", new THREE.BufferAttribute(view(spec.wave, Float32Array), Math.round(spec.wave.length / spec.vertices)));
+      }
       geometry.setIndex(new THREE.BufferAttribute(view(spec.index, spec.index.type === "uint32" ? Uint32Array : Uint16Array), 1));
       for (const group of spec.groups) geometry.addGroup(group.start, group.count, group.material);
       return geometry;
     });
-    const group = new THREE.Group(); // what the engine moves (scale, roaming); the model's own root is inside
+    const group = new THREE.Group(); // what the engine scales; the model's own root is inside
     const nodes = manifest.nodes.map((spec) => {
       const object = spec.mesh !== undefined ? new THREE.Mesh(geometries[spec.mesh], materials) : new THREE.Group();
       object.name = spec.name;
@@ -878,14 +860,6 @@ export class Hologram {
     this.root.add(group);
     const byName = new Map(nodes.map((object) => [object.name, object]));
     const spare = new THREE.Object3D(); // stands in for a part a model does not have
-    const chains = new Map();
-    for (const object of nodes) {
-      const { chain, link } = object.userData.tags;
-      if (chain !== undefined) {
-        if (!chains.has(chain)) chains.set(chain, []);
-        chains.get(chain)[link] = object;
-      }
-    }
     // "Explodir peças": a part hung from a pivot (not from another part) moves away from that pivot.
     const spread = [];
     for (const object of nodes) {
@@ -895,7 +869,7 @@ export class Hologram {
       if (center.lengthSq() > 1e-6) spread.push([object, center.normalize().multiplyScalar(0.35)]);
     }
     this.rig = {
-      group, nodes, geometries, materials, chains: [...chains.values()], spread, state: {}, clock: 0,
+      group, nodes, geometries, materials, spread, state: {}, clock: 0,
       base: new Map(nodes.map((object) => [object, { position: object.position.clone(), quaternion: object.quaternion.clone(),
         scale: object.scale.clone(), visible: object.visible }])),
       glows: materials.filter((material) => material.userData.glow > 0),
@@ -954,23 +928,18 @@ export class Hologram {
     if (!box.width || !box.height) box = this.host.getBoundingClientRect();
     const width = Math.max(1, Math.round(box.width));
     const height = Math.max(1, Math.round(box.height));
-    // The model keeps its size by its frame: the canvas itself, or (a model roaming past it) the frame it left.
-    const frame = (this.roaming && this.options.frame?.()) || { width, height };
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
     const reach = this.manifest?.camera?.distance ?? 6.1;
     const distance = reach / this.view.zoom;
     this.camera.position.set(0, 0, distance); // Blender's camera at (0, -distance, 0), looking along +Y
     this.camera.aspect = width / height;
-    const halfHeight = (1.2 / (this.options.fit ?? 0.82)) * (height / Math.max(1, Math.min(frame.width, frame.height)));
+    const halfHeight = (1.2 / (this.options.fit ?? 0.82)) * (height / Math.min(width, height));
     this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(halfHeight / reach));
     this.camera.updateProjectionMatrix();
     // A WebGL line is one pixel and Blender's tubes are thinner: each layer's light is scaled by how
     // many pixels its tube would cover, so a line carries as much light as in the render.
     const pixelsPerUnit = (height * this.renderer.getPixelRatio()) / (2 * distance * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2));
-    this.view.ppu = pixelsPerUnit / this.renderer.getPixelRatio();
-    this.view.width = width;
-    this.view.height = height;
     for (const layer of this.layers) {
       const tube = 2 * (layer.userData.thickness || 0.002) * pixelsPerUnit;
       layer.material.uniforms.uCoverage.value = Math.min(1, Math.max(0.25, tube));
@@ -1080,12 +1049,10 @@ export class Hologram {
     this.motion.y = ease(this.motion.y, moving.y || 0, 10, dt);
     const pace = (calm ? 0.3 : 1) * (0.3 + 0.7 * (config.spin / 50)) * smooth.spin;
     rig.clock += dt * pace;
-    const roam = this.roaming && this.view.ppu
-      ? { x: Math.max(0, this.view.width / 2 / this.view.ppu - 0.95), z: Math.max(0, this.view.height / 2 / this.view.ppu - 0.85) } : null;
     BEHAVIORS[this.manifest.behavior]?.(rig, {
       t: rig.clock, dt, time: now / 1000, state, level: smooth.level, talk: smooth.voice, speaking: state === "speaking",
       float: config.float / 50, secondary: config.orbit / 50, pulse: config.pulse / 50, pointer, motion: this.motion,
-      roam, camera: this.camera, config, calm,
+      camera: this.camera, config, calm,
     });
     for (const object of rig.nodes) {
       if (config.parts[object.userData.role] === false) object.visible = false;
@@ -1095,10 +1062,12 @@ export class Hologram {
     const thinking = state === "thinking" ? 1 + 0.3 * Math.sin((now / 1000) * 7) : 1;
     const glow = breath * thinking * (1 + 1.4 * smooth.voice) * smooth.intensity * (config.opacity / 70) * (0.2 + 0.8 * smooth.born);
     for (const material of rig.glows) material.emissiveIntensity = material.userData.glow * glow;
-    for (const material of rig.waves) { // the tentacles: their pace and reach (the behavior may raise both)
+    for (const material of rig.waves) { // the tentacles: their pace, their reach and the twitches (from the behavior)
       const { spec, wave } = material.userData;
       wave.uWaveTime.value += dt * (spec.wave.speed ?? 1.6) * (rig.waveSpeed ?? 1) * (config.orbit / 50) * (calm ? 0.3 : 1);
       wave.uWaveAmp.value = (spec.wave.amp ?? 0.05) * (rig.waveAmp ?? 1) * (0.3 + 0.7 * smooth.born);
+      wave.uTwitch.value = calm ? 0 : rig.twitch ?? 0;
+      wave.uTwitchPhase.value = rig.twitchPhase ?? 0;
     }
     rig.group.scale.setScalar((config.scale / 100) * (0.92 + 0.08 * smooth.born));
   }

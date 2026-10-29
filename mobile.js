@@ -37,7 +37,9 @@
     volume: ["VOLUME", "VOLUME", "VOLUMEN"], mute: ["MUDO", "MUTE", "SILENCIO"], desktop: ["ÁREA DE TRAB.", "DESKTOP", "ESCRITORIO"],
     lock: ["BLOQUEAR PC", "LOCK PC", "BLOQUEAR PC"], refresh: ["ATUALIZAR", "REFRESH", "ACTUALIZAR"], live: ["AO VIVO", "LIVE", "EN VIVO"],
     screenTitle: ["// TELA DO PC", "// PC SCREEN", "// PANTALLA DEL PC"],
-    shotHint: ["Toque em ATUALIZAR para ver a tela do PC.", "Tap REFRESH to see the PC screen.", "Toque ACTUALIZAR para ver la pantalla del PC."],
+    shotHint: ["Ligue AO VIVO para ver a tela do PC em movimento (até 60 FPS), ou toque em ATUALIZAR para uma foto. Toque no vídeo para a tela cheia.",
+      "Turn on LIVE to watch the PC screen moving (up to 60 FPS), or tap REFRESH for a picture. Tap the video for full screen.",
+      "Active EN VIVO para ver la pantalla del PC en movimiento (hasta 60 FPS), o toque ACTUALIZAR para una foto. Toque el video para pantalla completa."],
     sendTitle: ["// ENVIAR PARA O PC", "// SEND TO THE PC", "// ENVIAR AL PC"], pick: ["Toque para escolher fotos ou arquivos", "Tap to pick photos or files", "Toque para elegir fotos o archivos"],
     pickNote: ["Vão para a pasta de anotações do PC", "They go to the PC's notes folder", "Van a la carpeta de notas del PC"], openTitle: ["// ABRIR NO PC", "// OPEN ON THE PC", "// ABRIR EN EL PC"],
     open: ["ABRIR", "OPEN", "ABRIR"], language: ["// LINGUAGEM", "// LANGUAGE", "// IDIOMA"],
@@ -68,9 +70,16 @@
     sending: ["Enviando para o Jarvis…", "Sending to Jarvis…", "Enviando a Jarvis…"], heardNothing: ["Não ouvi nada.", "I heard nothing.", "No oí nada."],
     offWifi: ["Fora do Wi-Fi do PC: ligue o acesso remoto na aba CELULAR do PC.", "Away from the PC's Wi-Fi: turn on remote access in the PC's PHONE tab.",
       "Fuera del Wi-Fi del PC: active el acceso remoto en la pestaña MÓVIL del PC."],
+    notHere: ["não está instalado neste celular.", "is not installed on this phone.", "no está instalado en este móvil."],
+    pickChat: ["Escolha a conversa: não achei o contato", "Pick the chat: contact not found", "Elija la conversación: no encontré el contacto"],
+    noContact: ["Não encontrei nos contatos:", "Not in the contacts:", "No está en los contactos:"],
+    needApk: ["Isso precisa do app Android (aba CELULAR do PC).", "That needs the Android app (the PC's PHONE tab).",
+      "Eso requiere la app Android (pestaña MÓVIL del PC)."],
+    tapToOpen: ["TOQUE PARA ABRIR", "TAP TO OPEN", "TOQUE PARA ABRIR"], phoneRow: ["CELULAR", "PHONE", "MÓVIL"],
   };
-  const state = { conn: null, base: "", route: "", seq: 0, synced: false, polling: false, failures: 0, live: 0, rows: new Map(), name: "Jarvis",
-    lang: "pt-BR", speak: true, quiet: REMOTE_APP, pollTimer: 0, mood: "idle", themeKey: "", modelsVersion: "" };
+  const state = { conn: null, base: "", route: "", seq: 0, synced: false, polling: false, failures: 0, rows: new Map(), name: "Jarvis",
+    lang: "pt-BR", speak: true, quiet: REMOTE_APP, pollTimer: 0, mood: "idle", themeKey: "", modelsVersion: "", askedAt: 0 };
+  const ASKED_WINDOW = 45000; // an order that arrives this soon after a request from this phone was made here
 
   /* ---------- storage and language ---------- */
 
@@ -633,6 +642,7 @@
     }
     toast(t("sending"));
     try {
+      state.askedAt = Date.now();
       await json(`/m/listen?quiet=${state.quiet ? 1 : 0}`, { method: "POST", body: blob, raw: true, timeout: 60000 });
       showPane("talk");
       poll(true);
@@ -668,14 +678,210 @@
     else if (event.type === "tool") addRow("tool", event.label, `${event.turn}-${event.seq}`);
     else if (event.type === "say" && live) enqueueSpeech(event.text);
     else if (event.type === "ignored" && live && event.why) toast(event.why, true);
+    else if (event.type === "action" && live) { // what a voice command shows ("foca no Japão"): panel.js decides
+      document.dispatchEvent(new CustomEvent("jarvis:phone-action", { detail: { view: event.view || "", command: event.command || "",
+        arg: event.arg || "", mine: Date.now() - state.askedAt < ASKED_WINDOW } }));
+    } else if (event.type === "phone" && live && Date.now() - state.askedAt < ASKED_WINDOW) {
+      phoneOrder(event); // asked on this phone: done on this phone
+    }
+  }
+
+  /* ---------- the phone itself: what the assistant does here (phone_control.py) ---------- */
+
+  // The Android app's own plugin (tools/build_android.py, JarvisDevicePlugin): the apps installed here, opening
+  // one, the contacts' numbers (read here, never sent), a message left written and a number dialed. Nothing is
+  // sent or called without the user's own tap.
+  const device = () => (NATIVE ? window.Capacitor?.Plugins?.JarvisDevice || null : null);
+  const phoneApps = { list: [] };
+  const PACKAGES = { whatsapp: ["com.whatsapp", "com.whatsapp.w4b"], telegram: ["org.telegram.messenger"] };
+  // In a browser (no Android app): the addresses that open these apps on a phone, with a tap.
+  const WEB_APPS = { whatsapp: "https://wa.me/", instagram: "https://www.instagram.com/", youtube: "https://m.youtube.com/",
+    discord: "https://discord.com/app", spotify: "https://open.spotify.com/", telegram: "https://t.me/", tiktok: "https://www.tiktok.com/",
+    facebook: "https://m.facebook.com/", x: "https://x.com/", twitter: "https://x.com/", gmail: "https://mail.google.com/",
+    maps: "https://maps.google.com/", "google maps": "https://maps.google.com/", netflix: "https://www.netflix.com/",
+    linkedin: "https://www.linkedin.com/", reddit: "https://www.reddit.com/", twitch: "https://m.twitch.tv/" };
+  const foldText = (text) => String(text || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  /** The PC learns the names of the apps installed here (only the names), so "abre o X" said here opens it here. */
+  async function reportApps() {
+    const plugin = device();
+    if (!plugin?.apps) return;
+    try {
+      const { apps } = await plugin.apps();
+      phoneApps.list = (apps || []).filter((app) => app?.name && app?.package);
+      await json("/m/phone-apps", { method: "POST", body: { apps: phoneApps.list.map((app) => app.name) } });
+    } catch (_) {
+      /* An older PC: the well-known apps still open here. */
+    }
+  }
+
+  function findApp(name, labels) {
+    const wanted = [...(labels || []), name].map(foldText).filter(Boolean);
+    const apps = phoneApps.list.map((app) => ({ app, key: foldText(app.name) }));
+    for (const want of wanted) {
+      const hit = apps.find((item) => item.key === want);
+      if (hit) return hit.app;
+    }
+    for (const want of wanted) { // "Google Maps" for "maps"
+      const hits = apps.filter((item) => ` ${item.key} `.includes(` ${want} `)).sort((a, b) => a.key.length - b.key.length);
+      if (hits.length) return hits[0].app;
+    }
+    return null;
+  }
+
+  /** How alike two names are (0-1): pairs of letters in common, for a name the recognizer got slightly wrong. */
+  function likeness(a, b) {
+    const pairs = (text) => Array.from({ length: Math.max(0, text.length - 1) }, (_, index) => text.slice(index, index + 2));
+    const left = pairs(a.replace(/ /g, ""));
+    const right = pairs(b.replace(/ /g, ""));
+    if (!left.length || !right.length) return 0;
+    let common = 0;
+    const pool = [...right];
+    for (const pair of left) {
+      const index = pool.indexOf(pair);
+      if (index >= 0) {
+        common += 1;
+        pool.splice(index, 1);
+      }
+    }
+    return (2 * common) / (left.length + right.length);
+  }
+
+  /** The contact the user named ("minha mãe", "Ana Clara", "o João"), read from this phone's contacts. */
+  async function findContact(said) {
+    const { contacts } = await device().contacts();
+    const wanted = foldText(said).replace(/^(?:minha|meu|minhas|meus|a|o|as|os) /, "");
+    let best = null;
+    let bestScore = 0;
+    for (const contact of contacts || []) {
+      const key = foldText(contact?.name);
+      if (!key || !contact.number) continue;
+      const words = wanted.split(" ");
+      const score = key === wanted ? 100 : key.startsWith(`${wanted} `) ? 80 : words.every((word) => ` ${key} `.includes(` ${word} `)) ? 70
+        : likeness(key, wanted) >= 0.8 ? 50 : 0;
+      if (score > bestScore || (score && score === bestScore && key.length < foldText(best.name).length)) {
+        best = contact;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  /** A number for WhatsApp links: digits with the country (one saved without it is taken as Brazil's). */
+  function waNumber(number) {
+    const raw = String(number || "").trim();
+    let digits = raw.replace(/\D/g, "");
+    if (raw.startsWith("+")) return digits;
+    if (digits.startsWith("00")) return digits.slice(2);
+    digits = digits.replace(/^0+/, "");
+    return digits.length <= 11 ? `55${digits}` : digits;
+  }
+
+  async function openWhatsApp(plugin, url) {
+    for (const name of PACKAGES.whatsapp) {
+      try {
+        await plugin.open({ url, package: name });
+        return;
+      } catch (_) {
+        /* Not this one: WhatsApp Business, or the browser. */
+      }
+    }
+    await plugin.open({ url });
+  }
+
+  /** In a browser a phone only opens another app from a touch: a row in the conversation with the link. */
+  function offer(label, url) {
+    const row = node("li", "row is-tool is-offer");
+    const button = node("a", "offer", `${t("tapToOpen")} · ${label}`);
+    button.href = url;
+    button.target = "_blank";
+    button.rel = "noopener noreferrer";
+    row.append(node("span", "who", t("phoneRow")), button);
+    $("#log").append(row);
+    $("#log").scrollTop = $("#log").scrollHeight;
+    showPane("talk");
+  }
+
+  async function phoneOrder(order) {
+    const plugin = device();
+    const app = order.app || "whatsapp";
+    try {
+      if (order.do === "open") {
+        if (plugin) {
+          if (!phoneApps.list.length) await reportApps();
+          const found = findApp(order.name, order.labels);
+          if (!found) throw new Error(`${order.name} ${t("notHere")}`);
+          await plugin.launch({ package: found.package });
+          return;
+        }
+        const url = [...(order.labels || []), order.name].map((name) => WEB_APPS[foldText(name)]).find(Boolean);
+        if (url) offer(order.name, url);
+        else toast(t("needApk"), true);
+      } else if (order.do === "message") {
+        const text = order.text || "";
+        if (!plugin) {
+          offer(app === "sms" ? "SMS" : "WhatsApp", app === "sms" ? `sms:?&body=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`);
+          return;
+        }
+        const contact = order.contact && app !== "telegram" ? await findContact(order.contact) : null;
+        if (contact && app === "sms") {
+          await plugin.open({ url: `smsto:${contact.number.replace(/[^\d+]/g, "")}`, text });
+        } else if (contact) {
+          await openWhatsApp(plugin, `https://wa.me/${waNumber(contact.number)}${text ? `?text=${encodeURIComponent(text)}` : ""}`);
+        } else { // no such contact here (or Telegram): the app's own list of chats, with the text
+          await plugin.share({ text, package: (PACKAGES[app] || PACKAGES.whatsapp)[0] }).catch(() => plugin.share({ text }));
+          if (app !== "telegram") toast(`${t("pickChat")} “${order.contact}”.`);
+        }
+      } else if (order.do === "call") {
+        if (!plugin) throw new Error(t("needApk"));
+        const contact = await findContact(order.contact);
+        if (!contact) throw new Error(`${t("noContact")} ${order.contact}`);
+        if (order.app === "whatsapp") await openWhatsApp(plugin, `https://wa.me/${waNumber(contact.number)}`);
+        else await plugin.open({ url: `tel:${contact.number.replace(/[^\d+]/g, "")}` });
+      }
+    } catch (error) {
+      toast(error?.message || String(error), true);
+    }
+  }
+
+  const rgbOf = (hex) => {
+    const value = parseInt(String(hex).replace("#", ""), 16);
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  };
+  const mix = (color, target, amount) => color.map((value, index) => Math.round(value + (target[index] - value) * amount));
+  const hexOf = (color) => `#${color.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+
+  /** Hue and saturation of a color (the desktop's theme.js does the same for its canvases). */
+  function hueOf([r, g, b]) {
+    const [rn, gn, bn] = [r / 255, g / 255, b / 255];
+    const max = Math.max(rn, gn, bn);
+    const min = Math.min(rn, gn, bn);
+    if (max === min) return [0, 0];
+    const d = max - min;
+    const light = (max + min) / 2;
+    const sat = light > 0.5 ? d / (2 - max - min) : d / (max + min);
+    const hue = max === rn ? (gn - bn) / d + (gn < bn ? 6 : 0) : max === gn ? (bn - rn) / d + 2 : (rn - gn) / d + 4;
+    return [hue * 60, sat];
   }
 
   function setTheme(theme) {
     if (!theme?.accent) return;
-    const value = parseInt(theme.accent.slice(1), 16);
-    document.documentElement.style.setProperty("--hud", theme.accent);
-    document.documentElement.style.setProperty("--hud-rgb", [(value >> 16) & 255, (value >> 8) & 255, value & 255].join(", "));
-    document.documentElement.style.setProperty("--accent2", theme.accent2 || "#ffb45e");
+    const accent = rgbOf(theme.accent);
+    const second = rgbOf(theme.accent2 || "#ffb45e");
+    const style = document.documentElement.style;
+    style.setProperty("--hud", theme.accent);
+    style.setProperty("--hud-rgb", accent.join(", "));
+    style.setProperty("--accent2", theme.accent2 || "#ffb45e");
+    style.setProperty("--accent2-rgb", second.join(", "));
+    style.setProperty("--amber", theme.accent2 || "#ffb45e");
+    style.setProperty("--hud-hot", hexOf(mix(accent, [255, 255, 255], 0.68)));
+    style.setProperty("--hud-blue", hexOf(mix(accent, [20, 60, 255], 0.45)));
+    // The map's globe is drawn in cyan (191°), like on the PC: it follows the accent by a hue rotation.
+    const [hue, sat] = hueOf(accent);
+    const shift = Math.abs(sat) < 0.08 ? 0 : ((hue - 191 + 540) % 360) - 180;
+    style.setProperty("--hue-shift", `${Math.round(shift)}deg`);
+    style.setProperty("--hue-sat", Math.max(0.05, Math.min(1.4, sat / 0.9)).toFixed(2));
+    document.documentElement.classList.toggle("is-themed", Math.abs(shift) > 2 || sat < 0.5);
     const key = JSON.stringify(theme);
     if (key !== state.themeKey) {
       state.themeKey = key;
@@ -742,6 +948,7 @@
     audioContext(); // a tap: the phone allows the voice to play from now on
     $("#ask").value = "";
     try {
+      state.askedAt = Date.now();
       await json("/m/ask", { method: "POST", body: { text: message, quiet: state.quiet } });
       showPane("talk");
       poll(true);
@@ -773,6 +980,7 @@
   }
 
   async function screenshot() {
+    setLive(false);
     const box = $("#shot-box");
     box.classList.add("is-loading");
     try {
@@ -786,19 +994,140 @@
       if (old.startsWith("blob:")) URL.revokeObjectURL(old);
     } catch (error) {
       toast(error.message, true);
-      setLive(false);
     } finally {
       box.classList.remove("is-loading");
     }
   }
 
+  /* ---------- TELA DO PC live: a screen share up to 60 fps (screen_stream.py) ----------
+     A WebSocket brings the PC's screen as H.264, decoded here by WebCodecs (in the phone's video hardware) and
+     drawn on a canvas; without WebCodecs (the page not on HTTPS) it brings JPEG frames. Every frame drawn is
+     acknowledged ("a<number>"): the PC sends only as fast as this phone and its network keep up. */
+  const live = { on: false, socket: null, decoder: null, config: null, canvas: null, context: null, mode: "", waitKey: true,
+    shown: 0, second: 0, fps: 0, retry: 0, failures: 0 };
+  const LIVE = { CONFIG: 1, KEY: 2, DELTA: 3, JPEG: 4 };
+
+  function liveStats() {
+    const stats = $(".shot-stats", $("#shot-box"));
+    if (!stats || !live.config) return;
+    const how = live.mode === "jpeg" ? "JPEG" : `H.264 · ${String(live.config.encoder || "").replace(/^h264_/, "").toUpperCase()}`;
+    stats.textContent = `${t("live")} · ${live.fps} FPS · ${live.config.width}×${live.config.height} · ${how}`;
+  }
+
+  function drawn(number) {
+    if (live.socket?.readyState === WebSocket.OPEN) live.socket.send(`a${number}`);
+    live.shown += 1;
+    const now = performance.now();
+    if (now - live.second >= 1000) {
+      live.fps = Math.round((live.shown * 1000) / (now - live.second || 1000));
+      live.shown = 0;
+      live.second = now;
+      liveStats();
+    }
+    $("#shot-box").classList.remove("is-loading");
+  }
+
+  function liveDecoder() {
+    if (live.decoder && live.decoder.state !== "closed") live.decoder.close();
+    live.decoder = new window.VideoDecoder({
+      output: (frame) => {
+        live.context.drawImage(frame, 0, 0, live.canvas.width, live.canvas.height);
+        const number = frame.timestamp;
+        frame.close();
+        drawn(number);
+      },
+      error: () => { // a broken frame: start again from the next keyframe
+        live.waitKey = true;
+        if (live.socket?.readyState === WebSocket.OPEN) live.socket.send("k");
+        if (live.on && live.config) window.setTimeout(liveDecoder, 0);
+      },
+    });
+    live.decoder.configure({ codec: live.config.codec, codedWidth: live.config.width, codedHeight: live.config.height,
+      optimizeForLatency: true, hardwareAcceleration: "prefer-hardware" });
+    live.waitKey = true;
+  }
+
+  function onLive(buffer) {
+    const view = new DataView(buffer);
+    const kind = view.getUint8(0);
+    const number = view.getUint32(1);
+    const payload = new Uint8Array(buffer, 13);
+    if (kind === LIVE.CONFIG) {
+      live.config = JSON.parse(new TextDecoder().decode(payload));
+      live.canvas.width = live.config.width;
+      live.canvas.height = live.config.height;
+      live.failures = 0;
+      if (live.mode !== "jpeg") liveDecoder();
+      liveStats();
+    } else if (kind === LIVE.JPEG) {
+      window.createImageBitmap(new Blob([payload], { type: "image/jpeg" })).then((bitmap) => {
+        if (live.canvas.width !== bitmap.width) {
+          live.canvas.width = bitmap.width;
+          live.canvas.height = bitmap.height;
+          live.config = { width: bitmap.width, height: bitmap.height };
+        }
+        live.context.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        drawn(number);
+      }, () => drawn(number));
+    } else if (live.decoder?.state === "configured") {
+      if (kind === LIVE.DELTA && live.waitKey) return; // nothing to build it on: wait for the keyframe
+      if (kind === LIVE.KEY) live.waitKey = false;
+      live.decoder.decode(new window.EncodedVideoChunk({ type: kind === LIVE.KEY ? "key" : "delta", timestamp: number, data: payload }));
+    }
+  }
+
+  function startLive() {
+    stopLive(false);
+    live.on = true;
+    const box = $("#shot-box");
+    let canvas = $("canvas", box);
+    if (!canvas) {
+      canvas = node("canvas");
+      box.replaceChildren(canvas, node("span", "shot-stats", `${t("live")} · …`));
+    }
+    live.canvas = canvas;
+    live.context = canvas.getContext("2d", { alpha: false });
+    box.classList.add("is-live", "is-loading");
+    // H.264 needs WebCodecs (a secure page: the Android app, GitHub Pages); else JPEG frames.
+    live.mode = "VideoDecoder" in window && window.isSecureContext && live.failures < 2 ? "h264" : "jpeg";
+    const base = (state.base || location.origin).replace(/^http/, "ws");
+    const socket = new WebSocket(`${base}/m/screen/live${live.mode === "jpeg" ? "?mode=jpeg" : ""}`, ["jarvis", state.conn?.token || ""]);
+    socket.binaryType = "arraybuffer";
+    live.socket = socket;
+    live.config = null;
+    live.second = performance.now();
+    live.shown = 0;
+    socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) onLive(event.data);
+    };
+    socket.onclose = () => {
+      if (live.socket !== socket || !live.on) return;
+      if (!live.config) live.failures += 1; // never got a picture: the next try uses JPEG
+      live.retry = window.setTimeout(startLive, live.failures > 3 ? 5000 : 1200);
+    };
+  }
+
+  function stopLive(off = true) {
+    window.clearTimeout(live.retry);
+    if (off) live.on = false;
+    const socket = live.socket;
+    live.socket = null;
+    if (socket && socket.readyState <= WebSocket.OPEN) socket.close(1000);
+    if (live.decoder && live.decoder.state !== "closed") live.decoder.close();
+    live.decoder = null;
+    $("#shot-box")?.classList.remove("is-live", "is-loading");
+  }
+
   function setLive(on) {
-    window.clearInterval(state.live);
-    state.live = 0;
     $("#shot-live").checked = on;
     if (on) {
-      screenshot();
-      state.live = window.setInterval(screenshot, state.route === "remote" ? 4000 : 2500);
+      live.failures = 0;
+      startLive();
+    } else {
+      stopLive();
+      $("#shot-box").classList.remove("is-full");
+      document.body.classList.remove("is-watching");
     }
   }
 
@@ -848,6 +1177,7 @@
     window.clearInterval(state.pollTimer);
     poll(true);
     state.pollTimer = window.setInterval(poll, state.route === "remote" ? 1500 : 1000);
+    reportApps();
     document.dispatchEvent(new CustomEvent("jarvis:phone-ready"));
   }
 
@@ -916,9 +1246,12 @@
     vibrate,
     showPane,
     node,
+    sliced,
     get lang() { return state.lang; },
     get theme() { return state.theme; },
     get modelsVersion() { return state.modelsVersion; },
+    /** This page came from the PC itself (its address on the Wi-Fi), not from the app's own files. */
+    get servedByPc() { return !REMOTE_APP; },
     /** The hologram: what the assistant is doing, and how loud (its voice here, or the microphone). */
     voice() {
       if (document.body.classList.contains("is-recording")) return { state: "armed", level: rec.level };
@@ -1000,6 +1333,27 @@
     }));
     $("#shot").addEventListener("click", screenshot);
     $("#shot-live").addEventListener("change", (event) => setLive(event.target.checked));
+    $("#shot-box").addEventListener("click", () => { // the live video in full screen, lying down, and back
+      const box = $("#shot-box");
+      if (!live.on && !box.classList.contains("is-full")) return;
+      const full = box.classList.toggle("is-full");
+      document.body.classList.toggle("is-watching", full);
+      if (full) {
+        box.requestFullscreen?.().then(() => window.screen.orientation?.lock?.("landscape")).catch(() => {});
+      } else if (document.fullscreenElement) {
+        window.screen.orientation?.unlock?.();
+        document.exitFullscreen().catch(() => {});
+      }
+    });
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement && $("#shot-box").classList.contains("is-full")) {
+        $("#shot-box").classList.remove("is-full");
+        document.body.classList.remove("is-watching");
+      }
+    });
+    document.addEventListener("visibilitychange", () => { // in the background: no video for nobody
+      if (document.hidden && live.on) setLive(false);
+    });
     $("#files").addEventListener("change", (event) => {
       uploadFiles([...event.target.files]);
       event.target.value = "";
@@ -1033,7 +1387,8 @@
     if (REMOTE_APP && !NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
     if (NATIVE) {
       window.Capacitor?.Plugins?.App?.addListener?.("backButton", () => { // Android's back key: one step back, then out
-        if ($("#pane-panel").classList.contains("is-active") && !$("#module").hidden) document.dispatchEvent(new CustomEvent("jarvis:phone-back"));
+        if ($("#shot-box").classList.contains("is-full")) $("#shot-box").click(); // out of the full-screen video
+        else if ($("#pane-panel").classList.contains("is-active") && !$("#module").hidden) document.dispatchEvent(new CustomEvent("jarvis:phone-back"));
         else if (!$("#pane-talk").classList.contains("is-active")) showPane("talk");
         else window.Capacitor.Plugins.App.minimizeApp?.();
       });

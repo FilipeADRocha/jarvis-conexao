@@ -1,7 +1,9 @@
 /* Conexão JARVIS: keeps the app's own files for offline start (the conversation itself always needs
    the PC). Network first, so a new version arrives as soon as it is online. */
-const CACHE = "conexao-jarvis-v3";
+const CACHE = "conexao-jarvis-v4";
+// The map's data (geo/, ~4 MB) is kept the first time the map opens, not at install.
 const SHELL = ["./", "index.html", "mobile.css", "mobile.js", "panel.js", "holo-loader.js", "holo.js", "holo-engine.js", "manifest.json", "icon.svg",
+  "globe.js", "map-intel.js", "map.css",
   "vendor/jsQR.js", "vendor/three/three.module.min.js", "vendor/three/addons/postprocessing/EffectComposer.js",
   "vendor/three/addons/postprocessing/MaskPass.js", "vendor/three/addons/postprocessing/OutputPass.js",
   "vendor/three/addons/postprocessing/Pass.js", "vendor/three/addons/postprocessing/RenderPass.js",

@@ -1,7 +1,7 @@
 /* PAINEL: the PC's HUD on the phone. The same 16 modules of the desktop ring, each adapted to a phone
    screen and fed by the desktop's own APIs through the phone link (/m/api/... -> /api/...): telemetry,
-   apps (launched on the PC), the investment market, news, the explorer, notes, the global map's dossier,
-   security, the tutorial and CUSTOMIZAÇÃO (theme and 3D model, which the PC follows at once).
+   apps (launched on the PC), the investment market, news, the explorer, notes, the global map (the PC's own
+   globe and dossier), security, the tutorial and CUSTOMIZAÇÃO (theme and 3D model, which the PC follows at once).
    "NO PC" shows the same module on the PC's screen. */
 (() => {
   "use strict";
@@ -15,14 +15,14 @@
     jarvis: { accent: "#2bd9ff", accent2: "#ffb45e", background: "profundo", style: "reator", font: "tecnica" },
     ultron: { accent: "#ff2e55", accent2: "#c7d0d8", background: "preto", style: "tatico", font: "mono" },
     sexta: { accent: "#b07bff", accent2: "#ff7ad9", background: "naval", style: "reator", font: "classica" },
-    matrix: { accent: "#3dff7a", accent2: "#ff3b2a", background: "preto", style: "minimal", font: "mono" },
+    sentinela: { accent: "#3dff7a", accent2: "#ff3b2a", background: "preto", style: "minimal", font: "mono" },
     hal: { accent: "#ff3b30", accent2: "#5aa9e6", background: "preto", style: "minimal", font: "classica" },
     kinito: { accent: "#ff7ae0", accent2: "#8dff5a", background: "naval", style: "reator", font: "mono" },
     verity: { accent: "#ffd21a", accent2: "#ff5a3c", background: "preto", style: "minimal", font: "tecnica" },
     glados: { accent: "#ffb21c", accent2: "#e9eef2", background: "carbono", style: "tatico", font: "tecnica" },
     auto: { accent: "#ff3a2e", accent2: "#eef3f6", background: "naval", style: "tatico", font: "tecnica" },
   };
-  const MODEL_NAMES = { jarvis: "JARVIS", ultron: "ULTRON", sexta: "SEXTA-FEIRA", matrix: "MATRIX", hal: "HAL 9000",
+  const MODEL_NAMES = { jarvis: "JARVIS", ultron: "ULTRON", sexta: "SEXTA-FEIRA", sentinela: "SENTINELA", hal: "HAL 9000",
     kinito: "KINITOPET", verity: "VERITY", glados: "GLaDOS", auto: "AUTO" };
   let timer = 0;
   let clock = 0;
@@ -364,63 +364,61 @@
     body.replaceChildren(box);
   }
 
+  /* MAPA is the PC's own globe and dossier: the desktop's globe.js and map-intel.js run on #m-map (the same
+     elements), which stays in the page, so the globe keeps its place between visits. They are told the map
+     is on screen as the desktop tells them (body[data-view], "jarvis:view"), and get from here what the
+     desktop page gives them: the geographic data (in this app's own files), the dossier's sources through
+     the phone link, links opened on the phone and a light vibration for the HUD's sounds. */
+  const MAP_SOUNDS = { click: () => phone()?.vibrate(5), select: () => phone()?.vibrate(14), zoom() {}, data() {}, open() {}, close() {} };
+
+  /** The map's data: the app's own files (Android, GitHub Pages) at once; from the PC's own page in slices, each
+      retried on its own URL, since security software there now and then holds a long answer (~2 MB here). */
+  async function geoJSON(path, timeout = 20000, retries = 3) {
+    if (phone()?.servedByPc) return JSON.parse(new TextDecoder().decode(await phone().sliced(`/${path}`)));
+    let last = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      const clock = window.setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(path, { signal: controller.signal });
+        if (!response.ok) throw new Error(`mapa ${response.status}`);
+        return await response.json();
+      } catch (error) {
+        last = error;
+        await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)));
+      } finally {
+        window.clearTimeout(clock);
+      }
+    }
+    throw last;
+  }
+
+  window.jarvisHUD = window.jarvisHUD || { getJSON: geoJSON, sound: MAP_SOUNDS };
+  window.jarvisUI = window.jarvisUI || { toast: (text, error) => phone()?.toast(text, error) };
+  window.jarvisFetch = (url, options = {}) => phone().api(String(url).replace(/^\/api\//, "/m/api/"), { method: options.method || "GET",
+    body: options.body, raw: true, headers: options.headers, signal: options.signal, timeout: 60000 });
+  window.jarvisOpenLink = (url) => {
+    const anchor = node("a");
+    anchor.href = url;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    anchor.click();
+  };
+
+  function showMap(on) {
+    const box = $("#m-map");
+    if (!box) return;
+    box.hidden = !on;
+    $("#module-body").hidden = on;
+    const view = on ? "map" : "panel";
+    if (document.body.dataset.view === view) return;
+    document.body.dataset.view = view;
+    document.dispatchEvent(new CustomEvent("jarvis:view", { detail: { view } })); // the globe starts or stops drawing
+  }
+
   async function map(body) {
-    const results = node("div");
-    const run = async (query) => {
-      results.replaceChildren(node("p", "m-wait", L("ADQUIRINDO SINAL…", "ACQUIRING SIGNAL…", "ADQUIRIENDO SEÑAL…")));
-      let dossier = null;
-      try {
-        dossier = await phone().json(`/m/api/place?name=${encodeURIComponent(query)}&kind=city`, { timeout: 60000 });
-      } catch (error) {
-        results.replaceChildren(node("p", "m-note", error.message));
-        return;
-      }
-      const head = card();
-      if (dossier.image) {
-        const image = node("img", "m-photo");
-        image.src = dossier.image;
-        image.alt = "";
-        image.referrerPolicy = "no-referrer";
-        head.append(image);
-      }
-      head.append(node("p", "m-place", dossier.name), node("p", "m-desc", (dossier.description || "").toUpperCase()), node("p", "m-text", dossier.summary || ""),
-        kv(dossier.facts?.geral || []), button(L("MOSTRAR NO MAPA DO PC", "SHOW ON THE PC MAP", "MOSTRAR EN EL MAPA DEL PC"), () => phone().onPc("map", "map-focus", dossier.name)));
-      const live = card(L("// CLIMA · NOTÍCIAS · POLÊMICAS", "// WEATHER · NEWS · CONTROVERSIES", "// CLIMA · NOTICIAS · POLÉMICAS"));
-      live.append(node("p", "m-wait", "…"));
-      const tourism = card(L("// TURISMO", "// TOURISM", "// TURISMO"));
-      const sights = node("div", "m-sights");
-      for (const item of (dossier.attractions || []).slice(0, 8)) {
-        const tile = node("a", "m-sight");
-        tile.href = item.url;
-        tile.target = "_blank";
-        tile.rel = "noopener noreferrer";
-        if (item.image) tile.style.backgroundImage = `url("${item.image}")`;
-        tile.append(node("span", "", item.name));
-        sights.append(tile);
-      }
-      tourism.append(sights.childElementCount ? sights : node("p", "m-note", "--"));
-      const power = card(L("// POLÍTICA · ECONOMIA", "// POLITICS · ECONOMY", "// POLÍTICA · ECONOMÍA"));
-      power.append(kv([...(dossier.facts?.politica || []), ...(dossier.facts?.economia || [])]));
-      results.replaceChildren(head, live, tourism, power);
-      try {
-        const params = new URLSearchParams({ name: dossier.name, lat: String(dossier.lat ?? ""), lon: String(dossier.lon ?? "") });
-        const data = await phone().json(`/m/api/place/live?${params}`, { timeout: 30000 });
-        const weather = data.weather;
-        const parts = [];
-        if (weather) {
-          const local = new Date(Date.now() + (weather.utc_offset || 0) * 1000);
-          parts.push(kv([[L("AGORA", "NOW", "AHORA"), `${Math.round(weather.temp)}° · ${weather.sky}`],
-            [L("MÍN / MÁX", "MIN / MAX", "MÍN / MÁX"), `${Math.round(weather.min)}° / ${Math.round(weather.max)}°`],
-            [L("HORA LOCAL", "LOCAL TIME", "HORA LOCAL"), `${String(local.getUTCHours()).padStart(2, "0")}:${String(local.getUTCMinutes()).padStart(2, "0")}`]]));
-        }
-        parts.push(node("h4", "", L("ÚLTIMAS NOTÍCIAS", "LATEST NEWS", "ÚLTIMAS NOTICIAS")), linkList(data.news, "--"),
-          node("h4", "is-warn", L("POLÊMICAS & ALERTAS", "CONTROVERSIES & ALERTS", "POLÉMICAS Y ALERTAS")), linkList(data.controversies, "--"));
-        live.replaceChildren(...parts);
-      } catch (error) {
-        live.replaceChildren(node("p", "m-note", error.message));
-      }
-    };
-    body.replaceChildren(search(L("País, estado ou cidade…", "Country, state or city…", "País, estado o ciudad…"), run), results);
+    body.replaceChildren();
+    showMap(true);
   }
 
   async function tutorial(body) {
@@ -452,7 +450,10 @@
       try {
         const saved = await phone().json("/m/api/customization", { method: "POST", body: { tema: { ...data.tema, ...patch } } });
         data.tema = saved.tema;
-        phone().toast(L("Aplicado no PC.", "Applied on the PC.", "Aplicado en el PC."));
+        const renamed = saved.nome && saved.nome !== data.nome; // another model: it answers to its name now
+        data.nome = saved.nome || data.nome;
+        phone().toast(renamed ? L(`Aplicado. Agora diga “${data.nome}”.`, `Applied. Now say “${data.nome}”.`, `Aplicado. Ahora di “${data.nome}”.`)
+          : L("Aplicado no PC.", "Applied on the PC.", "Aplicado en el PC."));
         render();
       } catch (error) {
         phone().toast(error.message, true);
@@ -583,6 +584,7 @@
     }
     current = module;
     const column = { "en-US": 1, "es-ES": 2 }[phone().lang] || 0;
+    showMap(false);
     $("#panel-home").hidden = true;
     $("#module").hidden = false;
     $("#module-title").textContent = module.title[column];
@@ -600,23 +602,54 @@
   function close() {
     window.clearInterval(timer);
     current = null;
+    showMap(false);
     $("#module").hidden = true;
     $("#panel-home").hidden = false;
+  }
+
+  /** "NO PC": the same module on the PC's screen; the map with the place in focus here. */
+  function onPc() {
+    if (!current?.pc) return;
+    const focus = current.id === "map" ? window.jarvisGlobe?.focus?.() : null;
+    if (focus?.name) phone().onPc("map", "map-focus", focus.name);
+    else phone().onPc(current.pc);
+  }
+
+  /** A voice command for the map ("foca no Japão", "aproxima"): the map here follows it while it is on
+      screen, and opens for it when the request was made from this phone. */
+  function mapAction({ view, command, arg, mine }) {
+    if (view !== "map" && !String(command || "").startsWith("map-")) return;
+    const showing = current?.id === "map" && $("#pane-panel").classList.contains("is-active");
+    if (!showing && !mine) return; // asked on the PC: the phone stays where it is
+    if (!showing) {
+      current = null; // the pane change must not reopen the module that was there
+      phone().showPane("panel");
+      open("map");
+    }
+    if (command) {
+      window.setTimeout(() => document.dispatchEvent(new CustomEvent("jarvis:command", { detail: { command, query: arg, target: arg } })),
+        showing ? 0 : 160);
+    }
   }
 
   function init() {
     if (!$("#ring")) return;
     $("#module-back").addEventListener("click", close);
-    $("#module-pc").addEventListener("click", () => current?.pc && phone().onPc(current.pc));
+    $("#module-pc").addEventListener("click", onPc);
     document.addEventListener("jarvis:phone-back", close);
     document.addEventListener("jarvis:phone-lang", () => {
       buildRing();
       if (current) open(current.id);
     });
     document.addEventListener("jarvis:phone-pane", (event) => {
-      if (event.detail.pane !== "panel") window.clearInterval(timer);
-      else if (current) open(current.id);
+      if (event.detail.pane !== "panel") {
+        window.clearInterval(timer);
+        showMap(false); // the globe stops drawing while another tab is open
+      } else if (current) {
+        open(current.id);
+      }
     });
+    document.addEventListener("jarvis:phone-action", (event) => mapAction(event.detail || {}));
     buildRing();
   }
 

@@ -8,6 +8,14 @@
   --muted: #6f8e9d;
   --mono: "Cascadia Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --ui: "Bahnschrift", "DIN Alternate", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* The desktop's names for the same things (map.css is shared with it); set from the theme by mobile.js. */
+  --font-ui: var(--ui);
+  --font-mono: var(--mono);
+  --amber: #ffb45e;
+  --hud-hot: #b8f6ff;
+  --hud-blue: #1f8bff;
+  --hue-shift: 0deg;
+  --hue-sat: 1;
   color-scheme: dark;
 }
 
@@ -388,6 +396,20 @@ body[data-state="speaking"] .holo-fallback b {
   line-height: 1.45;
 }
 
+/* In a browser, an app on the phone opens from a touch: the order waits as a link (mobile.js offer). */
+.row .offer {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 9px 14px;
+  border: 1px solid var(--hud);
+  border-radius: 18px;
+  background: rgba(var(--hud-rgb), 0.12);
+  color: var(--hud);
+  font: 10px var(--mono);
+  letter-spacing: 0.14em;
+  text-decoration: none;
+}
+
 /* Control */
 .gauges {
   display: grid;
@@ -546,9 +568,63 @@ body[data-state="speaking"] .holo-fallback b {
   text-align: center;
 }
 
-.shot img {
+.shot img,
+.shot canvas {
   display: block;
   width: 100%;
+}
+
+.shot canvas {
+  height: auto;
+  background: #000;
+}
+
+/* The live video (mobile.js startLive): its numbers over it, and the whole screen at a touch. */
+.shot-stats {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 3px 8px;
+  border: 1px solid rgba(var(--hud-rgb), 0.45);
+  border-radius: 10px;
+  background: rgba(0, 6, 12, 0.7);
+  color: var(--hud);
+  font: 8.5px var(--mono);
+  letter-spacing: 0.14em;
+  pointer-events: none;
+}
+
+.shot.is-live .shot-stats::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #ff3b30;
+  box-shadow: 0 0 6px #ff3b30;
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+.shot.is-full {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+}
+
+.shot.is-full canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+body.is-watching .tabs,
+body.is-watching .ask {
+  visibility: hidden;
 }
 
 .shot.is-loading::after,
@@ -1738,64 +1814,6 @@ pre.m-text {
   font: normal 10px var(--mono);
 }
 
-.m-photo {
-  display: block;
-  width: calc(100% + 24px);
-  max-height: 200px;
-  margin: -12px -12px 12px;
-  border-radius: 10px 10px 0 0;
-  object-fit: cover;
-  -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent);
-  mask-image: linear-gradient(180deg, #000 70%, transparent);
-}
-
-.m-place {
-  margin: 0;
-  font: 500 24px var(--ui);
-  letter-spacing: 0.06em;
-  text-shadow: 0 0 14px var(--hud);
-}
-
-.m-desc {
-  margin: 2px 0 10px;
-  color: var(--hud);
-  font: 9px var(--mono);
-  letter-spacing: 0.16em;
-}
-
-.m-sights {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-}
-
-.m-sight {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  aspect-ratio: 4 / 3;
-  padding: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(var(--hud-rgb), 0.3);
-  border-radius: 8px;
-  background: rgba(var(--hud-rgb), 0.1) center / cover no-repeat;
-  color: #fff;
-  font-size: 12px;
-  line-height: 1.3;
-  text-decoration: none;
-}
-
-.m-sight::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.85));
-}
-
-.m-sight span {
-  position: relative;
-}
-
 .m-presets {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1829,4 +1847,209 @@ pre.m-text {
 .m-preset.is-active {
   border-color: var(--a);
   box-shadow: 0 0 14px color-mix(in srgb, var(--a) 45%, transparent);
+}
+
+/* ---------- MAPA: the PC's globe and dossier (map.css), the panels in one column ---------- */
+
+.gl-layout.m-map {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  --globe-h: min(calc(100vw - 32px), 56vh);
+}
+
+.m-map .vx-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(var(--hud-rgb), 0.16);
+  background: linear-gradient(180deg, rgba(5, 18, 28, 0.84), rgba(3, 10, 17, 0.74));
+  box-shadow: inset 0 0 22px rgba(var(--hud-rgb), 0.04);
+}
+
+.m-map .vx-panel::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 26px;
+  height: 2px;
+  background: var(--hud);
+  box-shadow: 0 0 8px var(--hud);
+}
+
+.m-map .vx-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  color: var(--hud);
+  font: 400 9px var(--mono);
+  letter-spacing: 0.24em;
+}
+
+.m-map .vx-head em {
+  color: #5f7c8c;
+  font-style: normal;
+  letter-spacing: 0.14em;
+}
+
+.m-map .vx-empty {
+  margin: 0;
+  color: #56707f;
+  font: 11px/1.6 var(--mono);
+  letter-spacing: 0.06em;
+}
+
+.m-map .vx-button {
+  align-self: flex-start;
+  padding: 10px 16px;
+  border: 1px solid rgba(var(--hud-rgb), 0.45);
+  background: rgba(10, 60, 80, 0.3);
+  color: var(--hud-hot);
+  font: 10px var(--mono);
+  letter-spacing: 0.22em;
+}
+
+.m-map #gl-search {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(var(--hud-rgb), 0.35);
+  border-radius: 8px;
+  outline: 0;
+  background: rgba(0, 8, 14, 0.7);
+  color: var(--text);
+  font-size: 16px; /* 16 px or more: the phone does not zoom the page on focus */
+}
+
+.m-map #gl-search:focus {
+  border-color: var(--hud);
+  box-shadow: 0 0 12px rgba(var(--hud-rgb), 0.3);
+}
+
+.m-map .gl-results button,
+.m-map .gl-list button {
+  padding: 9px 8px;
+  font-size: 13px;
+}
+
+.m-map .gl-results button em,
+.m-map .gl-list button em {
+  font-size: 9.5px;
+}
+
+.m-map .gl-list {
+  max-height: 46vh;
+}
+
+.m-map .gl-layers {
+  gap: 10px;
+  font-size: 13px;
+}
+
+.m-map .gl-coords dd {
+  font-size: 12px;
+}
+
+.m-map .gl-stage {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+}
+
+.m-map .gl-title h2 {
+  margin: 2px 0 4px;
+  color: #d8f7ff;
+  font: 400 20px var(--ui);
+  letter-spacing: 0.32em;
+}
+
+.m-map .gl-title p {
+  padding: 0 6px;
+  font-size: 7.5px;
+  line-height: 1.6;
+}
+
+.m-globe {
+  position: relative;
+  height: var(--globe-h);
+}
+
+.m-map .gl-controls button,
+.m-map .gl-controls .mi-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+}
+
+.m-map .gl-controls .mi-toggle {
+  font-size: 9px;
+}
+
+/* Drawn in cyan, like on the PC: the globe follows the theme's accent by hue (mobile.js setTheme). */
+html.is-themed .m-map canvas {
+  filter: hue-rotate(var(--hue-shift)) saturate(var(--hue-sat));
+}
+
+/* The dossier: the PC opens its six cards around the globe, wired to the place; here they follow it,
+   one after another (two side by side on a wide screen). The place's marker and the tourist pins stay
+   on the globe. */
+.m-map .mi-layer {
+  position: static;
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.m-map .mi-layer.is-hidden {
+  display: none;
+}
+
+.m-map .mi-wires {
+  display: none;
+}
+
+.m-map .mi-ribbon {
+  top: 50px;
+  max-width: calc(100% - 12px);
+}
+
+.m-map .mi-card,
+.m-map .mi-card.is-left,
+.m-map .mi-card.is-right {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  width: auto;
+  height: auto;
+  max-height: 380px;
+  backdrop-filter: none;
+}
+
+.m-map .mi-card-head {
+  font-size: 9.5px;
+}
+
+.m-map .mi-list-title,
+.m-map .mi-summary {
+  font-size: 12.5px;
+}
+
+.m-map .mi-sight {
+  height: 76px;
+}
+
+@media (min-width: 600px) {
+  .m-map .mi-layer {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@keyframes online-blink {
+  0%, 100% { opacity: 1; }
+  48% { opacity: 1; }
+  50% { opacity: 0.45; }
+  52% { opacity: 1; }
 }
