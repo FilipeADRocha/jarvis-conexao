@@ -706,6 +706,31 @@
     }
   }
 
+  /* ---------- the app's own errors, in the PC's logs (area "celular.app"), sent once connected ---------- */
+  const failures = { queue: [], sent: new Map(), budget: 30 };
+
+  function reportError(level, message, where, stack) {
+    const text = String(message || "").slice(0, 1500);
+    const key = `${level}|${text}|${where}`;
+    if (!text || failures.budget <= 0 || Date.now() - (failures.sent.get(key) || 0) < 10000) return;
+    failures.sent.set(key, Date.now());
+    failures.budget -= 1;
+    failures.queue.push({ level, message: text, where: `${NATIVE ? "app Android" : "página"} ${where || ""}`.trim(), stack: String(stack || "").slice(0, 3000) });
+    flushErrors();
+  }
+
+  async function flushErrors() {
+    if (!state.conn?.token || !state.synced) return; // not yet connected: sent with the first answers
+    while (failures.queue.length) {
+      const item = failures.queue.shift();
+      try {
+        await json("/m/log", { method: "POST", body: item });
+      } catch (_) {
+        return; // the PC is away: the rest waits
+      }
+    }
+  }
+
   /* ---------- ATUALIZAÇÃO NECESSÁRIA: the Android app is kept at the PC's newest build ----------
      The APK carries its own build (app-version.json, tools/build_android.py); every /m/state says the newest the PC
      offers. An older app is locked behind this screen until the update is installed: the JarvisDevice plugin
@@ -1034,6 +1059,7 @@
       $("#host").textContent = data.telemetry?.hostname || "";
       if (data.telemetry) gauges(data.telemetry);
       checkUpdate(data.app);
+      if (failures.queue.length) flushErrors();
     } catch (error) {
       if (state.pollAbort !== controller) return true; // given way to a fresh poll (repoll): not a failure
       state.failures += 1;
@@ -1419,6 +1445,11 @@
   };
 
   function init() {
+    window.addEventListener("error", (event) => reportError("error", event.message || String(event.error),
+      `${(event.filename || "").split("/").pop()}:${event.lineno || 0}`, event.error?.stack));
+    window.addEventListener("unhandledrejection", (event) => reportError("error", event.reason?.message || String(event.reason), "promise",
+      event.reason?.stack));
+    window.setInterval(() => { failures.budget = 30; }, 60000);
     loadConn();
     loadBuild();
     background();
