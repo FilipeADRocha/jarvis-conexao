@@ -2170,13 +2170,19 @@ html.is-themed .m-map canvas {
   transition: stroke-dasharray 0.3s;
 }
 
+.update-core b:empty {
+  display: none;
+}
+
 .update-core b {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -26px;
+  left: 50%;
+  bottom: 9%;
+  padding: 1px 7px;
+  transform: translateX(-50%);
+  background: rgba(2, 8, 14, 0.85);
   color: var(--hud);
-  font: 600 13px var(--mono);
+  font: 600 11px var(--mono);
   letter-spacing: 0.16em;
   text-shadow: 0 0 10px var(--hud);
 }
