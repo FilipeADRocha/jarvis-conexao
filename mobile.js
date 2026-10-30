@@ -78,8 +78,13 @@
     tapToOpen: ["TOQUE PARA ABRIR", "TAP TO OPEN", "TOQUE PARA ABRIR"], phoneRow: ["CELULAR", "PHONE", "MÓVIL"],
   };
   const state = { conn: null, base: "", route: "", seq: 0, synced: false, polling: false, failures: 0, rows: new Map(), name: "Jarvis",
-    lang: "pt-BR", speak: true, quiet: REMOTE_APP, pollTimer: 0, mood: "idle", themeKey: "", modelsVersion: "", askedAt: 0 };
+    lang: "pt-BR", speak: true, quiet: REMOTE_APP, loop: 0, mood: "idle", themeKey: "", modelsVersion: "", askedAt: 0 };
   const ASKED_WINDOW = 45000; // an order that arrives this soon after a request from this phone was made here
+  // The PC holds each /m/state request until there is news (a reply, a sentence to say, a new state): what
+  // happens there reaches this phone at once, not at the next tick of a timer. With CONTROLE open, the PC
+  // answers every couple of seconds anyway, for the gauges.
+  const LONG_POLL = 15000;
+  const GAUGES_POLL = 2000;
 
   /* ---------- storage and language ---------- */
 
@@ -173,7 +178,7 @@
 
   async function reachable(base) {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 1600);
+    const timer = window.setTimeout(() => controller.abort(), 1200);
     try {
       const response = await fetch(`${base}/m/state?since=999999999`, { headers: { Authorization: `Bearer ${state.conn?.token || ""}` },
         cache: "no-store", signal: controller.signal });
@@ -194,13 +199,15 @@
     }
     if (state.base && !force) return state.base;
     const lan = (state.conn?.lan || "").replace(/\/+$/, "");
+    // Both asked at once: the Wi-Fi if the PC answers there (quicker), else the tunnel's current address.
+    const viaTunnel = state.conn?.topic ? latestAddress(state.conn.topic) : Promise.reject(new Error(lan ? t("offWifi") : "sem servidor"));
+    viaTunnel.catch(() => {});
     if (NATIVE && lan && await reachable(lan)) {
       state.base = lan;
       state.route = "lan";
       return lan;
     }
-    if (!state.conn?.topic) throw new Error(lan ? t("offWifi") : "sem servidor");
-    state.base = await latestAddress(state.conn.topic);
+    state.base = await viaTunnel;
     state.route = "remote";
     return state.base;
   }
@@ -405,7 +412,7 @@
       }
       bootLine("bootOk")("✓");
       vibrate(40);
-      window.setTimeout(startApp, 700);
+      window.setTimeout(startApp, 200);
     } catch (error) {
       toast(error.message, true);
       if (state.conn?.token) window.setTimeout(() => connectFlow(null), 6000); // the PC may be starting
@@ -612,7 +619,7 @@
       } else if (spoke && !quietSince) {
         quietSince = now;
       }
-      if ((spoke && quietSince && now - quietSince > 1300) || now - started > 15000) {
+      if ((spoke && quietSince && now - quietSince > 950) || now - started > 15000) { // a pause of under a second ends it
         stopRecording();
         return;
       }
@@ -645,7 +652,6 @@
       state.askedAt = Date.now();
       await json(`/m/listen?quiet=${state.quiet ? 1 : 0}`, { method: "POST", body: blob, raw: true, timeout: 60000 });
       showPane("talk");
-      poll(true);
     } catch (error) {
       toast(error.message, true);
     }
@@ -902,11 +908,15 @@
     }));
   }
 
-  async function poll(force = false) {
-    if (state.polling && !force) return;
-    state.polling = true;
+  /** One request for what is new; held by the PC until there is something (see LONG_POLL). True if it answered. */
+  async function poll() {
+    const onControl = $("#pane-control")?.classList.contains("is-active"); // its gauges want fresh figures
+    const wait = !state.synced ? 0 : onControl ? GAUGES_POLL : LONG_POLL;
+    const query = `since=${state.seq}&wait=${wait}&state=${encodeURIComponent(state.mood)}&speak=${state.speak ? 1 : 0}`;
+    const controller = new AbortController();
+    state.pollAbort = controller;
     try {
-      const data = await json(`/m/state?since=${state.seq}`, { timeout: 8000 });
+      const data = await json(`/m/state?${query}`, { timeout: wait + 10000, signal: controller.signal });
       const live = state.synced;
       state.failures = 0;
       $("#lost").hidden = true;
@@ -917,7 +927,8 @@
       state.modelsVersion = String(data.models || "");
       setTheme(data.theme);
       for (const event of data.events || []) {
-        state.seq = Math.max(state.seq, event.seq);
+        if (event.seq <= state.seq) continue; // already seen (by a request that answered first)
+        state.seq = event.seq;
         handle(event, live);
       }
       state.seq = Math.max(state.seq, data.seq || 0);
@@ -929,15 +940,31 @@
       $("#host").textContent = data.telemetry?.hostname || "";
       if (data.telemetry) gauges(data.telemetry);
     } catch (error) {
+      if (state.pollAbort !== controller) return true; // given way to a fresh poll (repoll): not a failure
       state.failures += 1;
       $("#dot").classList.remove("is-on");
       if (state.failures >= 3) {
         $("#lost").hidden = false;
         if (REMOTE_APP && state.failures % 3 === 0) resolveBase(true).catch(() => {}); // a new tunnel address, or back on the Wi-Fi
       }
-    } finally {
-      state.polling = false;
+      return false;
     }
+    return true;
+  }
+
+  /** Asks again as soon as each answer arrives, for as long as this connection lasts. */
+  async function pollLoop() {
+    const mine = ++state.loop;
+    while (mine === state.loop) {
+      if (!(await poll())) await new Promise((resolve) => window.setTimeout(resolve, state.failures >= 3 ? 2500 : 600));
+    }
+  }
+
+  /** Something just changed here (a tab, a request): the poll in progress gives way to a fresh one. */
+  function repoll() {
+    const waiting = state.pollAbort;
+    pollLoop();
+    waiting?.abort();
   }
 
   async function ask(text) {
@@ -950,8 +977,7 @@
     try {
       state.askedAt = Date.now();
       await json("/m/ask", { method: "POST", body: { text: message, quiet: state.quiet } });
-      showPane("talk");
-      poll(true);
+      showPane("talk"); // what was heard and the reply arrive through the poll that is already waiting
     } catch (error) {
       toast(error.message, true);
     }
@@ -962,8 +988,11 @@
   function showPane(name) {
     $$(".pane").forEach((pane) => pane.classList.toggle("is-active", pane.id === `pane-${name}`));
     $$(".tabs [data-pane]").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.pane === name));
+    const control = name === "control" || $("#pane-control").classList.contains("was-active");
+    $("#pane-control").classList.toggle("was-active", name === "control");
     if (name !== "control") setLive(false);
     if (name === "settings") renderConn();
+    if (control && state.synced) repoll(); // CONTROLE's gauges: answered every couple of seconds while it is open
     document.dispatchEvent(new CustomEvent("jarvis:phone-pane", { detail: { pane: name } }));
   }
 
@@ -1155,7 +1184,10 @@
         /* Offline: forgotten here anyway; it can be revoked on the PC. */
       }
     }
-    window.clearInterval(state.pollTimer);
+    state.loop += 1; // the poll loop ends, and the request it was waiting on
+    const waiting = state.pollAbort;
+    state.pollAbort = null;
+    waiting?.abort();
     stopSpeech();
     state.conn = null;
     state.base = "";
@@ -1174,9 +1206,7 @@
     $("#entry").hidden = true;
     $("#app").hidden = false;
     renderConn();
-    window.clearInterval(state.pollTimer);
-    poll(true);
-    state.pollTimer = window.setInterval(poll, state.route === "remote" ? 1500 : 1000);
+    pollLoop();
     reportApps();
     document.dispatchEvent(new CustomEvent("jarvis:phone-ready"));
   }
