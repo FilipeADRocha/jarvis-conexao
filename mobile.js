@@ -73,6 +73,8 @@
     notHere: ["não está instalado neste celular.", "is not installed on this phone.", "no está instalado en este móvil."],
     pickChat: ["Escolha a conversa: não achei o contato", "Pick the chat: contact not found", "Elija la conversación: no encontré el contacto"],
     noContact: ["Não encontrei nos contatos:", "Not in the contacts:", "No está en los contactos:"],
+    bubbleOverlay: ["Permita “sobrepor a outros apps” para o Conexão JARVIS e peça de novo.",
+      "Allow “display over other apps” for Conexão JARVIS and ask again.", "Permite “mostrar sobre otras apps” para Conexão JARVIS y pide de nuevo."],
     needApk: ["Isso precisa do app Android (aba CELULAR do PC).", "That needs the Android app (the PC's PHONE tab).",
       "Eso requiere la app Android (pestaña MÓVIL del PC)."],
     tapToOpen: ["TOQUE PARA ABRIR", "TAP TO OPEN", "TOQUE PARA ABRIR"], phoneRow: ["CELULAR", "PHONE", "MÓVIL"],
@@ -527,7 +529,7 @@
 
   /** Each sentence is fetched as soon as it is known (synthesis takes a moment), played in order. */
   function enqueueSpeech(text) {
-    if (!state.speak || !text) return;
+    if (!state.speak || !text || state.bubble) return; // the floating bubble speaks for itself
     const context = audioContext();
     if (!context) return;
     const generation = audio.generation;
@@ -665,7 +667,7 @@
     try {
       state.askedAt = Date.now();
       await json(`/m/listen?quiet=${state.quiet ? 1 : 0}`, { method: "POST", body: blob, raw: true, timeout: 60000 });
-      showPane("talk");
+      dock("thinking", "", t("sending"));
     } catch (error) {
       toast(error.message, true);
     }
@@ -692,9 +694,42 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  /* ---------- the dock: the conversation over any tab, so asking never takes the user away from it ---------- */
+  const docked = { timer: 0, turn: null };
+
+  function dock(kind, heard, text) {
+    const box = $("#dock");
+    if (!box || $("#pane-talk").classList.contains("is-active")) {
+      box && (box.hidden = true);
+      return;
+    }
+    window.clearTimeout(docked.timer);
+    if (heard !== null && heard !== undefined && heard !== "") $("#dock-heard").textContent = `“${heard}”`;
+    if (kind === "thinking" && heard) $("#dock-text").textContent = "";
+    if (text) $("#dock-text").textContent = text;
+    box.dataset.kind = kind;
+    box.hidden = false;
+    dockLater();
+  }
+
+  /** Gone a few seconds after the reply, once nothing is being said. */
+  function dockLater() {
+    window.clearTimeout(docked.timer);
+    docked.timer = window.setTimeout(() => {
+      const busy = ["thinking", "speaking"].includes(state.mood) || audio.playing || audio.queue.length;
+      if (busy) dockLater();
+      else $("#dock").hidden = true;
+    }, 6000);
+  }
+
   function handle(event, live) {
-    if (event.type === "heard") addRow("user", event.text, event.turn);
-    else if (event.type === "reply") addRow("jarvis", event.text, event.turn);
+    if (event.type === "heard") {
+      addRow("user", event.text, event.turn);
+      if (live) dock("thinking", event.text, "…");
+    } else if (event.type === "reply") {
+      addRow("jarvis", event.text, event.turn);
+      if (live) dock("reply", null, event.text);
+    }
     else if (event.type === "tool") addRow("tool", event.label, `${event.turn}-${event.seq}`);
     else if (event.type === "say" && live) enqueueSpeech(event.text);
     else if (event.type === "ignored" && live && event.why) toast(event.why, true);
@@ -924,14 +959,44 @@
     row.append(node("span", "who", t("phoneRow")), button);
     $("#log").append(row);
     $("#log").scrollTop = $("#log").scrollHeight;
-    showPane("talk");
+    dock("reply", "", `${t("tapToOpen")} · ${label}`);
+    $("#dock-text").replaceChildren(button.cloneNode(true));
+  }
+
+  /** "Fica em segundo plano" said here: the app steps aside and the assistant floats over the other apps as a
+      bubble (JarvisBubbleService), which listens, speaks and sees this phone's screen; back in the app, it goes. */
+  async function toBackground(plugin) {
+    if (!plugin?.startBubble) throw new Error(t("needApk"));
+    for (let waited = 0; (audio.playing || audio.queue.length) && waited < 8000; waited += 200) {
+      await new Promise((resolve) => window.setTimeout(resolve, 200)); // the "em segundo plano" said first
+    }
+    try {
+      const accent = getComputedStyle(document.documentElement).getPropertyValue("--hud").trim() || "#2bd9ff";
+      state.bubble = "starting"; // Android's questions (overlay, screen) leave and resume the app meanwhile
+      await plugin.startBubble({ base: state.base || location.origin, token: state.conn?.token || "", accent });
+      state.bubble = true;
+      state.bubbleAt = Date.now();
+    } catch (error) {
+      state.bubble = false;
+      throw error?.code === "overlay" ? new Error(t("bubbleOverlay")) : error;
+    }
+  }
+
+  function bubbleGone() {
+    if (state.bubble !== true || Date.now() - (state.bubbleAt || 0) < 2500) return; // not while it is being opened
+    state.bubble = false;
+    device()?.stopBubble?.().catch(() => {});
   }
 
   async function phoneOrder(order) {
     const plugin = device();
     const app = order.app || "whatsapp";
     try {
-      if (order.do === "open") {
+      if (order.do === "background") {
+        await toBackground(plugin);
+      } else if (order.do === "foreground") {
+        bubbleGone();
+      } else if (order.do === "open") {
         if (plugin) {
           if (!phoneApps.list.length) await reportApps();
           const found = findApp(order.name, order.labels);
@@ -1055,6 +1120,7 @@
       state.mood = data.state || "idle";
       document.body.dataset.state = state.mood;
       $("#state").textContent = STATES[state.lang][state.mood] || state.mood.toUpperCase();
+      $("#dock-state").textContent = $("#state").textContent;
       $("#dot").classList.add("is-on");
       $("#host").textContent = data.telemetry?.hostname || "";
       if (data.telemetry) gauges(data.telemetry);
@@ -1098,7 +1164,7 @@
     try {
       state.askedAt = Date.now();
       await json("/m/ask", { method: "POST", body: { text: message, quiet: state.quiet } });
-      showPane("talk"); // what was heard and the reply arrive through the poll that is already waiting
+      dock("thinking", message, ""); // answered here, on whatever tab is open; the poll already waiting brings it
     } catch (error) {
       toast(error.message, true);
     }
@@ -1108,6 +1174,7 @@
 
   function showPane(name) {
     $$(".pane").forEach((pane) => pane.classList.toggle("is-active", pane.id === `pane-${name}`));
+    if (name === "talk") $("#dock").hidden = true; // the whole conversation is there
     $$(".tabs [data-pane]").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.pane === name));
     const control = name === "control" || $("#pane-control").classList.contains("was-active");
     $("#pane-control").classList.toggle("was-active", name === "control");
@@ -1544,6 +1611,9 @@
     $("#disconnect").addEventListener("click", () => disconnect(true));
     if (REMOTE_APP && !NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
     if (NATIVE) {
+      window.Capacitor?.Plugins?.App?.addListener?.("appStateChange", ({ isActive }) => { // back in the app: no bubble
+        if (isActive) bubbleGone();
+      });
       window.Capacitor?.Plugins?.App?.addListener?.("backButton", () => { // Android's back key: one step back, then out
         if (update.shown) window.Capacitor.Plugins.App.minimizeApp?.(); // the update cannot be skipped
         else if ($("#shot-box").classList.contains("is-full")) $("#shot-box").click(); // out of the full-screen video

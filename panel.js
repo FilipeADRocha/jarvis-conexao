@@ -341,8 +341,7 @@
   async function askCard(body, text, label, question) {
     const box = card();
     box.append(node("p", "m-text", text), button(label, () => {
-      phone().ask(question);
-      phone().showPane("talk");
+      phone().ask(question); // answered where the user is (mobile.js dock)
     }));
     body.replaceChildren(box);
   }
@@ -361,7 +360,6 @@
       kv([[L("VERSÃO", "VERSION", "VERSIÓN"), data.version], ["SHELL", data.shell]]),
       button(L("PERGUNTAR AO JARVIS", "ASK JARVIS", "PREGUNTAR A JARVIS"), () => {
         phone().ask("status do projeto");
-        phone().showPane("talk");
       }));
     body.replaceChildren(box);
   }
@@ -439,7 +437,6 @@
     for (const command of commands) {
       chips.append(button(command, () => {
         phone().ask(command);
-        phone().showPane("talk");
       }, "m-chip"));
     }
     tries.append(chips);
