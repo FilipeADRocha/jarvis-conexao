@@ -205,6 +205,32 @@
     </nav>
   </section>
 
+  <!-- A newer Android app on the PC: mandatory, installed from here; nothing else can be touched until then -->
+  <section class="update" id="update" role="alertdialog" aria-modal="true" aria-labelledby="update-title" hidden>
+    <div class="update-grid" aria-hidden="true"></div>
+    <div class="update-scan" aria-hidden="true"></div>
+    <div class="entry-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <header class="update-head">
+      <span data-i18n="updProtocol">PROTOCOLO DE ATUALIZAÇÃO</span>
+      <span class="update-code">SYS-UPD // 0x7A</span>
+    </header>
+    <div class="update-core" aria-hidden="true">
+      <i class="u1"></i><i class="u2"></i><i class="u3"></i>
+      <svg viewBox="-50 -50 100 100"><circle class="update-arc" r="44" pathLength="100"></circle><path d="M0 -18V12M-11 2 0 13 11 2M-14 20H14"></path></svg>
+      <b id="update-percent"></b>
+    </div>
+    <h1 class="update-title" id="update-title"><small data-i18n="updKicker">ATUALIZAÇÃO</small><strong data-i18n="updRequired" data-text="NECESSÁRIA">NECESSÁRIA</strong></h1>
+    <p class="update-text" id="update-text" data-i18n="updText">Uma nova versão do Conexão JARVIS está no seu PC. Instale para continuar: até lá o app fica bloqueado.</p>
+    <dl class="update-versions">
+      <div><dt data-i18n="updFrom">INSTALADA</dt><dd id="update-from">--</dd></div>
+      <i aria-hidden="true">›</i>
+      <div class="is-new"><dt data-i18n="updTo">NOVA</dt><dd id="update-to">--</dd></div>
+    </dl>
+    <div class="update-bar" aria-hidden="true"><i id="update-bar"></i></div>
+    <ol class="update-log" id="update-log" aria-live="polite"></ol>
+    <button type="button" class="cta update-go" id="update-install"><i></i><span data-i18n="updInstall">INSTALAR ATUALIZAÇÃO</span></button>
+  </section>
+
   <div class="toast" id="toast" role="status"></div>
   <script src="mobile.js"></script>
   <script src="panel.js"></script>

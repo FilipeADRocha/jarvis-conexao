@@ -76,6 +76,20 @@
     needApk: ["Isso precisa do app Android (aba CELULAR do PC).", "That needs the Android app (the PC's PHONE tab).",
       "Eso requiere la app Android (pestaña MÓVIL del PC)."],
     tapToOpen: ["TOQUE PARA ABRIR", "TAP TO OPEN", "TOQUE PARA ABRIR"], phoneRow: ["CELULAR", "PHONE", "MÓVIL"],
+    updProtocol: ["PROTOCOLO DE ATUALIZAÇÃO", "UPDATE PROTOCOL", "PROTOCOLO DE ACTUALIZACIÓN"], updKicker: ["ATUALIZAÇÃO", "UPDATE", "ACTUALIZACIÓN"],
+    updRequired: ["NECESSÁRIA", "REQUIRED", "NECESARIA"],
+    updText: ["Uma nova versão do Conexão JARVIS está no seu PC. Instale para continuar: até lá o app fica bloqueado.",
+      "A new version of Conexão JARVIS is on your PC. Install it to go on: until then the app stays locked.",
+      "Hay una nueva versión de Conexão JARVIS en su PC. Instálela para seguir: hasta entonces la app queda bloqueada."],
+    updFrom: ["INSTALADA", "INSTALLED", "INSTALADA"], updTo: ["NOVA", "NEW", "NUEVA"],
+    updInstall: ["INSTALAR ATUALIZAÇÃO", "INSTALL UPDATE", "INSTALAR ACTUALIZACIÓN"], updAgain: ["INSTALAR DE NOVO", "INSTALL AGAIN", "INSTALAR DE NUEVO"],
+    updFound: ["Nova versão detectada no PC", "New version found on the PC", "Nueva versión detectada en el PC"],
+    updAllow: ["Permita “instalar apps desconhecidos” para o Conexão JARVIS e volte aqui", "Allow “install unknown apps” for Conexão JARVIS and come back",
+      "Permita “instalar apps desconocidas” para Conexão JARVIS y vuelva aquí"],
+    updDownload: ["Baixando o pacote do PC", "Downloading the package from the PC", "Descargando el paquete del PC"],
+    updVerify: ["Pacote recebido · abrindo o instalador", "Package received · opening the installer", "Paquete recibido · abriendo el instalador"],
+    updConfirm: ["Toque em INSTALAR na janela do Android", "Tap INSTALL in Android's window", "Toque INSTALAR en la ventana de Android"],
+    updFailed: ["Falhou", "Failed", "Falló"],
   };
   const state = { conn: null, base: "", route: "", seq: 0, synced: false, polling: false, failures: 0, rows: new Map(), name: "Jarvis",
     lang: "pt-BR", speak: true, quiet: REMOTE_APP, loop: 0, mood: "idle", themeKey: "", modelsVersion: "", askedAt: 0 };
@@ -692,6 +706,86 @@
     }
   }
 
+  /* ---------- ATUALIZAÇÃO NECESSÁRIA: the Android app is kept at the PC's newest build ----------
+     The APK carries its own build (app-version.json, tools/build_android.py); every /m/state says the newest the PC
+     offers. An older app is locked behind this screen until the update is installed: the JarvisDevice plugin
+     downloads it from the PC (in slices) and opens Android's installer. The page on GitHub or on the PC is always
+     the newest already: only the Android app checks. */
+  const update = { build: 0, name: "", shown: false, busy: false, listener: null };
+
+  async function loadBuild() {
+    if (!NATIVE) return;
+    try {
+      const data = await (await fetch("app-version.json", { cache: "no-store" })).json();
+      update.build = Number(data.build) || 0;
+      update.name = String(data.name || "");
+    } catch (_) {
+      /* A build from before versions: it cannot tell, and does not lock. */
+    }
+  }
+
+  function updateLog(key, bad = false, extra = "") {
+    const row = node("li", bad ? "is-bad" : "", `${t(key)}${extra ? ` · ${extra}` : ""}`);
+    $("#update-log").append(row);
+    while ($("#update-log").children.length > 3) $("#update-log").firstElementChild.remove();
+  }
+
+  function updateProgress(percent) {
+    const value = Math.max(0, Math.min(100, Math.round(percent)));
+    $("#update-bar").style.width = `${value}%`;
+    $(".update-arc").style.strokeDasharray = `${value} 100`;
+    $("#update-percent").textContent = `${value}%`;
+  }
+
+  function checkUpdate(app) {
+    if (!NATIVE || !update.build || !app?.build || app.build <= update.build || update.shown || !device()?.install) return;
+    update.shown = true;
+    setLive(false);
+    stopSpeech();
+    if (document.body.classList.contains("is-recording")) stopRecording();
+    document.activeElement?.blur?.();
+    const size = app.size ? ` · ${(app.size / 1048576).toFixed(1)} MB` : "";
+    $("#update-from").textContent = `v${update.name || "?"}\nBUILD ${update.build}`;
+    $("#update-to").textContent = `v${app.name || "?"}\nBUILD ${app.build}`;
+    $("#update-log").replaceChildren();
+    updateLog("updFound", false, `build ${app.build}${size}`);
+    updateProgress(0);
+    $("#update-percent").textContent = "";
+    $("#update").hidden = false;
+    document.body.classList.add("is-updating");
+    vibrate(60);
+  }
+
+  async function installUpdate() {
+    const plugin = device();
+    if (!plugin || update.busy) return;
+    update.busy = true;
+    const button = $("#update-install");
+    button.disabled = true;
+    $("#update").classList.add("is-busy");
+    try {
+      const { allowed } = await plugin.canInstall();
+      if (!allowed) { // once: Android asks to let this app install its updates
+        updateLog("updAllow");
+        await plugin.allowInstalls();
+        return;
+      }
+      updateLog("updDownload");
+      update.listener ||= await plugin.addListener("updateProgress", (data) => updateProgress(data.percent || 0));
+      await plugin.install({ url: `${state.base || location.origin}/conexao-jarvis.apk` });
+      updateProgress(100);
+      updateLog("updVerify");
+      updateLog("updConfirm");
+    } catch (error) {
+      updateLog("updFailed", true, error?.message || String(error));
+    } finally {
+      update.busy = false;
+      button.disabled = false;
+      $("#update").classList.remove("is-busy");
+      $("span", button).textContent = t("updAgain");
+    }
+  }
+
   /* ---------- the phone itself: what the assistant does here (phone_control.py) ---------- */
 
   // The Android app's own plugin (tools/build_android.py, JarvisDevicePlugin): the apps installed here, opening
@@ -939,6 +1033,7 @@
       $("#dot").classList.add("is-on");
       $("#host").textContent = data.telemetry?.hostname || "";
       if (data.telemetry) gauges(data.telemetry);
+      checkUpdate(data.app);
     } catch (error) {
       if (state.pollAbort !== controller) return true; // given way to a fresh poll (repoll): not a failure
       state.failures += 1;
@@ -1325,7 +1420,9 @@
 
   function init() {
     loadConn();
+    loadBuild();
     background();
+    $("#update-install").addEventListener("click", installUpdate);
     deviceName().then((name) => {
       state.device = name;
     });
@@ -1417,7 +1514,8 @@
     if (REMOTE_APP && !NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
     if (NATIVE) {
       window.Capacitor?.Plugins?.App?.addListener?.("backButton", () => { // Android's back key: one step back, then out
-        if ($("#shot-box").classList.contains("is-full")) $("#shot-box").click(); // out of the full-screen video
+        if (update.shown) window.Capacitor.Plugins.App.minimizeApp?.(); // the update cannot be skipped
+        else if ($("#shot-box").classList.contains("is-full")) $("#shot-box").click(); // out of the full-screen video
         else if ($("#pane-panel").classList.contains("is-active") && !$("#module").hidden) document.dispatchEvent(new CustomEvent("jarvis:phone-back"));
         else if (!$("#pane-talk").classList.contains("is-active")) showPane("talk");
         else window.Capacitor.Plugins.App.minimizeApp?.();
