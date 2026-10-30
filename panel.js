@@ -348,8 +348,10 @@
   }
 
   async function tests(body) {
-    await askCard(body, L("Roda a suíte de testes do projeto no PC; o resultado chega na conversa.", "Runs the project's test suite on the PC; the result comes in the conversation.",
-      "Ejecuta las pruebas del proyecto en el PC; el resultado llega a la conversación."), L("RODAR OS TESTES", "RUN THE TESTS", "EJECUTAR PRUEBAS"), "rode os testes");
+    await askCard(body, L("Roda a suíte de testes do projeto no PC; o resultado chega na conversa. Se algo falhar, ele lê a saída dos testes e corrige o código sozinho.",
+      "Runs the project's test suite on the PC; the result comes in the conversation. If something fails, it reads the test output and fixes the code itself.",
+      "Ejecuta las pruebas del proyecto en el PC; el resultado llega a la conversación. Si algo falla, lee la salida de las pruebas y corrige el código solo."),
+      L("RODAR OS TESTES", "RUN THE TESTS", "EJECUTAR PRUEBAS"), "rode os testes");
   }
 
   async function status(body) {
